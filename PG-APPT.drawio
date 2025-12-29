@@ -53,6 +53,11 @@
         <mxCell id="gdjESGJPNN2SLuCoCVeu-4" parent="WIyWlLk6GJQsqaUBKTNV-1" style="rhombus;whiteSpace=wrap;html=1;" value="Data Bricks" vertex="1">
           <mxGeometry height="80" width="80" x="510" y="120" as="geometry" />
         </mxCell>
+        <mxCell id="gdjESGJPNN2SLuCoCVeu-9" edge="1" parent="WIyWlLk6GJQsqaUBKTNV-1" source="gdjESGJPNN2SLuCoCVeu-6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" value="APPT Reads data and applies logic&lt;div&gt;&lt;br&gt;&lt;/div&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="389.5652173913045" y="383.4782608695652" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
         <mxCell id="gdjESGJPNN2SLuCoCVeu-6" parent="WIyWlLk6GJQsqaUBKTNV-1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;glass=0;strokeWidth=1;shadow=0;" value="Store Data in MS Sharepoint" vertex="1">
           <mxGeometry height="40" width="120" x="330" y="270" as="geometry" />
         </mxCell>
