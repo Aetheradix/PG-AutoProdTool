@@ -1,140 +1,159 @@
 import pandas as pd
-from pathlib import Path
-import re
+import os
+import sys
+from typing import Dict, List, Optional
+from src import config
+from src.models import SKUMeta, WashoutRule, ProductionBatch
 
 
-# ==============================
-# Path Configuration
-# ==============================
-BASE_DIR = Path(__file__).resolve().parents[1]
-
-
-# ==============================
-# Column Normalization Utility
-# ==============================
-def _normalize(col: str) -> str:
-    """
-    Normalize Excel column headers:
-    - lowercase
-    - remove spaces, newlines
-    - remove special characters
-    """
-    col = col.lower()
-    col = re.sub(r"\s+", "", col)
-    col = re.sub(r"[^a-z0-9]", "", col)
-    return col
-
-
-# ==============================
-# Master Data Loader
-# ==============================
 class MasterDataLoader:
-    def __init__(self, filename="Master Data - Auto Production Planning.xlsm"):
-        self.filepath = BASE_DIR / "data" / "input" / filename
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Master Data file not found: {filepath}")
 
-    # ---------- Public API ----------
-    def load(self):
-        return {
-            "bct": self._load_bct(),
-            "buffer": self._load_buffer(),
-            "washout": self._load_washout(),
-        }
+        print(f"Reading Excel file: {filepath} ...")
+        try:
+            self.xl = pd.ExcelFile(filepath)
+        except Exception as e:
+            raise IOError(f"Failed to open Excel file. Error: {e}")
 
-    # ---------- BCT Loader ----------
-    def _load_bct(self):
-        df = pd.read_excel(self.filepath, sheet_name="BCT Data ")
-        df.columns = df.columns.astype(str)
-
-        raw_cols = {_normalize(c): c for c in df.columns}
-
-        rename_map = {
-            raw_cols.get("gcas"): "sku",
-            raw_cols.get("system"): "system",
-            raw_cols.get("technology"): "technology",
-            raw_cols.get("bctmin"): "bct_min",
-            raw_cols.get("batchcycletimemin"): "bct_min",
-            raw_cols.get("batchcycletime"): "bct_min",
-        }
-
-        rename_map = {k: v for k, v in rename_map.items() if k is not None}
-        df = df.rename(columns=rename_map)
-
-        required = ["sku", "system", "technology", "bct_min"]
-        self._assert_columns(df, required, "BCT Data")
-
-        return df[required]
-
-    # ---------- Buffer Time Loader ----------
-    def _load_buffer(self):
-        df = pd.read_excel(self.filepath, sheet_name="Buffer Time")
-        df.columns = df.columns.astype(str)
-
-        raw_cols = {_normalize(c): c for c in df.columns}
-
-        rename_map = {
-            raw_cols.get("gcas"): "sku",
-            raw_cols.get("buffertimemin"): "buffer_min",
-            raw_cols.get("buffertime"): "buffer_min",
-        }
-
-        rename_map = {k: v for k, v in rename_map.items() if k is not None}
-        df = df.rename(columns=rename_map)
-
-        required = ["sku", "buffer_min"]
-        self._assert_columns(df, required, "Buffer Time")
-
-        return df[required]
-
-    # ---------- Washout Loader ----------
-    def _load_washout(self):
+    def _read_sheet_with_header_hunting(self, sheet_name: str, required_cols: List[str]) -> pd.DataFrame:
         """
-        Converts multiple washout matrices into a single normalized table:
-        from_sku | to_sku | system | technology | washout_min
+        Scans the first 20 rows of a sheet to find the row that contains
+        the required columns (handling metadata headers like 'Version', 'Prepared By').
         """
+        # Read first 20 rows without header
+        df_preview = self.xl.parse(sheet_name, header=None, nrows=20)
 
-        sheet_map = {
-            "Washout Matrix - FMT": ("FMT", None),
-            "Washout Matrix - 6T MMT": ("MMT", "6T"),
-            "Washout Matrix - 12T MMT": ("MMT", "12T"),
-            "Washout Matrix - PST": ("PST", None),
-        }
+        header_row_idx = None
 
-        records = []
+        # Scan rows to find one that contains at least one of our unique keywords
+        # We search loosely (partial match) to be safe
+        for idx, row in df_preview.iterrows():
+            row_vals = [str(x).strip() for x in row.values]
 
-        for sheet, (technology, system) in sheet_map.items():
-            df = pd.read_excel(self.filepath, sheet_name=sheet)
-            df.columns = df.columns.astype(str)
+            # Check if this row looks like a header
+            # We assume if we find the 'sku' column name (e.g. "Material" or "GCAS"), it's the header
+            matches = 0
+            for col in required_cols:
+                if col in row_vals:
+                    matches += 1
 
-            from_col = df.columns[0]
-            to_cols = df.columns[1:]
+            # If we match at least one specific column, we assume this is the header
+            if matches >= 1:
+                header_row_idx = idx
+                break
 
-            for _, row in df.iterrows():
-                from_sku = row[from_col]
+        if header_row_idx is None:
+            # Fallback: maybe the header is row 0 but named differently?
+            # Return empty DF so the caller raises the specific "Missing Column" error
+            print(f"[DEBUG] Could not find header row in '{sheet_name}' matching {required_cols}")
+            return pd.DataFrame()
 
-                for to_sku in to_cols:
-                    washout = row[to_sku]
+        # Reload the sheet using the correct header row
+        print(f"   -> Found header at Row {header_row_idx} in '{sheet_name}'")
+        df = self.xl.parse(sheet_name, header=header_row_idx)
+        return df
 
-                    if pd.notna(washout):
-                        records.append({
-                            "from_sku": from_sku,
-                            "to_sku": to_sku,
-                            "technology": technology,
-                            "system": system,
-                            "washout_min": washout
-                        })
+    def _normalize_cols(self, df: pd.DataFrame, mapping: Dict[str, str], strict: bool = True) -> pd.DataFrame:
+        if df.empty:
+            if strict: raise ValueError("Sheet data is empty or header not found.")
+            return df
 
-        washout_df = pd.DataFrame(records)
+        # Clean headers
+        df.columns = df.columns.astype(str).str.strip()
 
-        required = ["from_sku", "to_sku", "technology", "system", "washout_min"]
-        self._assert_columns(washout_df, required, "Washout Matrix")
+        # Invert mapping
+        reverse_map = {v: k for k, v in mapping.items()}
 
-        return washout_df
+        # Check for missing
+        missing = [v for v in mapping.values() if v not in df.columns]
 
-    # ---------- Internal Validator ----------
-    @staticmethod
-    def _assert_columns(df, required_cols, sheet_name):
-        missing = set(required_cols) - set(df.columns)
         if missing:
-            raise ValueError(
-                f"{sheet_name} missing required columns: {missing}"
-            )
+            if strict:
+                print(f"[DEBUG] Available Columns: {list(df.columns)}")
+                print(f"[DEBUG] Missing Columns: {missing}")
+                raise ValueError(f"Missing required columns: {missing}")
+            else:
+                return pd.DataFrame()  # Return empty if optional columns missing
+
+        return df.rename(columns=reverse_map)[list(mapping.keys())]
+
+    def load_master_data(self) -> Dict[str, SKUMeta]:
+        # 1. LOAD BUFFER (Simple, clean sheet)
+        buffer_map = {}
+        if config.SHEET_BUFFER in self.xl.sheet_names:
+            df_buf = self.xl.parse(config.SHEET_BUFFER)  # Buffer sheet seemed clean in inspection
+            try:
+                df_buf = self._normalize_cols(df_buf, config.COL_MAP_BUFFER)
+                buffer_map = df_buf.groupby('sku')['buffer_min'].max().to_dict()
+            except ValueError as e:
+                print(f"[WARNING] Buffer Error: {e}")
+
+        # 2. LOAD BCT (Needs header hunting)
+        print(f"Scanning '{config.SHEET_BCT}'...")
+        # We look for "Material" or "Cycle Time" to identify the header row
+        req_cols = list(config.COL_MAP_BCT.values())
+        df_bct = self._read_sheet_with_header_hunting(config.SHEET_BCT, req_cols)
+
+        try:
+            df_bct = self._normalize_cols(df_bct, config.COL_MAP_BCT)
+        except ValueError:
+            print("[CRITICAL] Could not map columns in BCT sheet. Check config.py.")
+            return {}
+
+        # 3. Aggregate
+        sku_objects = {}
+        for sku, group in df_bct.groupby('sku'):
+            sku = str(sku).strip()
+            if not sku or sku == 'nan': continue
+
+            tech = group.iloc[0]['technology']
+            bct_map = dict(zip(group['system'], group['bct_min']))
+            buf = buffer_map.get(sku, 0)
+
+            sku_objects[sku] = SKUMeta(sku, str(tech), int(buf), bct_map)
+
+        print(f"Successfully loaded {len(sku_objects)} SKUs.")
+        return sku_objects
+
+    def load_washout_rules(self) -> List[WashoutRule]:
+        rules = []
+        for sheet in config.SHEET_WASHOUT_LIST:
+            if sheet not in self.xl.sheet_names: continue
+
+            print(f"Scanning '{sheet}'...")
+            req_cols = list(config.COL_MAP_WASHOUT.values())
+            df = self._read_sheet_with_header_hunting(sheet, req_cols)
+
+            if df.empty:
+                print(f"   [SKIP] Empty or unreadable: {sheet}")
+                continue
+
+            try:
+                df = self._normalize_cols(df, config.COL_MAP_WASHOUT)
+                sys_class = "ALL"
+                if "-" in sheet: sys_class = sheet.split("-")[1].strip()
+
+                for _, row in df.iterrows():
+                    rules.append(WashoutRule(
+                        str(row['from_sku']).strip(),
+                        str(row['to_sku']).strip(),
+                        int(row['duration']),
+                        sys_class
+                    ))
+            except Exception as e:
+                print(f"   [SKIP] Error parsing {sheet}: {e}")
+
+        print(f"Successfully loaded {len(rules)} washout rules.")
+        return rules
+
+    def save_plan_to_excel(self, batches, filename="draft_plan.xlsx"):
+        path = os.path.join(config.OUTPUT_DIR, filename)
+        if not batches:
+            df = pd.DataFrame(columns=["Batch ID", "SKU", "System", "Shift", "Start", "End", "Type"])
+        else:
+            df = pd.DataFrame([vars(b) for b in batches])
+        df.to_excel(path, index=False)
+        print(f"Saved: {path}")
