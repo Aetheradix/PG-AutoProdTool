@@ -5,16 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8e094196-47f9-4b6f-aa09-e2267cdcd33b" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/APPT/src/excel_io.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/APPT/src/main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/APPT/src/test.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/APPT/src/utils/columns.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/APPT/src/validators.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/PG-AutoProdTool.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/PG-AutoProdTool.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/APPT/src/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/data/input/Master Data - Auto Production Planning.xlsm" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/data/input/Master Data - Auto Production Planning.xlsm" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/src/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -60,8 +55,11 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.columns.executor": "Run",
+    "Python.excel_io.executor": "Run",
     "Python.main.executor": "Run",
     "Python.test.executor": "Run",
+    "Python.validators.executor": "Run",
     "RunOnceActivity.MCP Project settings loaded": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
@@ -100,7 +98,7 @@
       <updated>1766993192381</updated>
       <workItem from="1766993193805" duration="3944000" />
       <workItem from="1767767352869" duration="6797000" />
-      <workItem from="1768284466268" duration="3606000" />
+      <workItem from="1768284466268" duration="9279000" />
     </task>
     <servers />
   </component>
@@ -108,7 +106,10 @@
     <option name="version" value="3" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/PG_AutoProdTool$main.coverage" NAME="main Coverage Results" MODIFIED="1768287467480" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/APPT/src" />
+    <SUITE FILE_PATH="coverage/PG_AutoProdTool$excel_io.coverage" NAME="excel_io Coverage Results" MODIFIED="1768290080974" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/APPT/src" />
+    <SUITE FILE_PATH="coverage/PG_AutoProdTool$main.coverage" NAME="main Coverage Results" MODIFIED="1768293725541" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/APPT/src" />
     <SUITE FILE_PATH="coverage/PG_AutoProdTool$test.coverage" NAME="test Coverage Results" MODIFIED="1768286456644" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/APPT/src" />
+    <SUITE FILE_PATH="coverage/PG_AutoProdTool$validators.coverage" NAME="validators Coverage Results" MODIFIED="1768290088854" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/APPT/src" />
+    <SUITE FILE_PATH="coverage/PG_AutoProdTool$columns.coverage" NAME="columns Coverage Results" MODIFIED="1768290093270" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/APPT/src/utils" />
   </component>
 </project>
