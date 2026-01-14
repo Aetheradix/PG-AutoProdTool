@@ -1,7 +1,8 @@
 import pandas as pd
 import os
 import sys
-from typing import Dict, List, Optional
+import re  # Added for regex parsing
+from typing import Dict, List
 from src import config
 from src.models import SKUMeta, WashoutRule, ProductionBatch
 
@@ -16,138 +17,137 @@ class MasterDataLoader:
         try:
             self.xl = pd.ExcelFile(filepath)
         except Exception as e:
-            raise IOError(f"Failed to open Excel file. Error: {e}")
-
-    def _read_sheet_with_header_hunting(self, sheet_name: str, required_cols: List[str]) -> pd.DataFrame:
-        """
-        Scans the first 20 rows of a sheet to find the row that contains
-        the required columns (handling metadata headers like 'Version', 'Prepared By').
-        """
-        # Read first 20 rows without header
-        df_preview = self.xl.parse(sheet_name, header=None, nrows=20)
-
-        header_row_idx = None
-
-        # Scan rows to find one that contains at least one of our unique keywords
-        # We search loosely (partial match) to be safe
-        for idx, row in df_preview.iterrows():
-            row_vals = [str(x).strip() for x in row.values]
-
-            # Check if this row looks like a header
-            # We assume if we find the 'sku' column name (e.g. "Material" or "GCAS"), it's the header
-            matches = 0
-            for col in required_cols:
-                if col in row_vals:
-                    matches += 1
-
-            # If we match at least one specific column, we assume this is the header
-            if matches >= 1:
-                header_row_idx = idx
-                break
-
-        if header_row_idx is None:
-            # Fallback: maybe the header is row 0 but named differently?
-            # Return empty DF so the caller raises the specific "Missing Column" error
-            print(f"[DEBUG] Could not find header row in '{sheet_name}' matching {required_cols}")
-            return pd.DataFrame()
-
-        # Reload the sheet using the correct header row
-        print(f"   -> Found header at Row {header_row_idx} in '{sheet_name}'")
-        df = self.xl.parse(sheet_name, header=header_row_idx)
-        return df
-
-    def _normalize_cols(self, df: pd.DataFrame, mapping: Dict[str, str], strict: bool = True) -> pd.DataFrame:
-        if df.empty:
-            if strict: raise ValueError("Sheet data is empty or header not found.")
-            return df
-
-        # Clean headers
-        df.columns = df.columns.astype(str).str.strip()
-
-        # Invert mapping
-        reverse_map = {v: k for k, v in mapping.items()}
-
-        # Check for missing
-        missing = [v for v in mapping.values() if v not in df.columns]
-
-        if missing:
-            if strict:
-                print(f"[DEBUG] Available Columns: {list(df.columns)}")
-                print(f"[DEBUG] Missing Columns: {missing}")
-                raise ValueError(f"Missing required columns: {missing}")
-            else:
-                return pd.DataFrame()  # Return empty if optional columns missing
-
-        return df.rename(columns=reverse_map)[list(mapping.keys())]
+            raise IOError(f"Failed to open Excel file: {e}")
 
     def load_master_data(self) -> Dict[str, SKUMeta]:
-        # 1. LOAD BUFFER (Simple, clean sheet)
+        """Parses BCT and Buffer sheets."""
+        # 1. LOAD BUFFER
         buffer_map = {}
         if config.SHEET_BUFFER in self.xl.sheet_names:
-            df_buf = self.xl.parse(config.SHEET_BUFFER)  # Buffer sheet seemed clean in inspection
-            try:
-                df_buf = self._normalize_cols(df_buf, config.COL_MAP_BUFFER)
-                buffer_map = df_buf.groupby('sku')['buffer_min'].max().to_dict()
-            except ValueError as e:
-                print(f"[WARNING] Buffer Error: {e}")
+            print(f"Loading Buffer Times from '{config.SHEET_BUFFER}'...")
+            df_buf = self.xl.parse(config.SHEET_BUFFER)
+            df_buf.columns = df_buf.columns.astype(str).str.strip()
 
-        # 2. LOAD BCT (Needs header hunting)
-        print(f"Scanning '{config.SHEET_BCT}'...")
-        # We look for "Material" or "Cycle Time" to identify the header row
-        req_cols = list(config.COL_MAP_BCT.values())
-        df_bct = self._read_sheet_with_header_hunting(config.SHEET_BCT, req_cols)
+            sku_col = config.COL_MAP_BUFFER['sku']
+            time_col = config.COL_MAP_BUFFER['buffer_min']
 
-        try:
-            df_bct = self._normalize_cols(df_bct, config.COL_MAP_BCT)
-        except ValueError:
-            print("[CRITICAL] Could not map columns in BCT sheet. Check config.py.")
-            return {}
+            if sku_col in df_buf.columns and time_col in df_buf.columns:
+                for _, row in df_buf.iterrows():
+                    gcas = str(row[sku_col]).strip()
+                    try:
+                        time_val = int(row[time_col])
+                        buffer_map[gcas] = time_val
+                    except:
+                        continue
 
-        # 3. Aggregate
+        # 2. LOAD BCT
+        print(f"Loading BCT Data from '{config.SHEET_BCT}'...")
+        if config.SHEET_BCT not in self.xl.sheet_names:
+            raise ValueError(f"Sheet '{config.SHEET_BCT}' missing.")
+
+        df = self.xl.parse(config.SHEET_BCT, header=config.BCT_HEADER_ROW)
         sku_objects = {}
-        for sku, group in df_bct.groupby('sku'):
-            sku = str(sku).strip()
-            if not sku or sku == 'nan': continue
 
-            tech = group.iloc[0]['technology']
-            bct_map = dict(zip(group['system'], group['bct_min']))
-            buf = buffer_map.get(sku, 0)
+        for idx, row in df.iloc[1:].iterrows():
+            try:
+                gcas = str(row.iloc[config.BCT_COL_GCAS]).strip()
+                tech = str(row.iloc[config.BCT_COL_TECH]).strip()
+                if not gcas or gcas.lower() == 'nan': continue
 
-            sku_objects[sku] = SKUMeta(sku, str(tech), int(buf), bct_map)
+                bct_map = {}
+                for col_idx, sys_name in config.BCT_SYSTEM_MAP.items():
+                    val = row.iloc[col_idx]
+                    try:
+                        if pd.notna(val) and str(val).strip() != '-':
+                            bct_map[sys_name] = float(val)
+                    except:
+                        pass
+
+                sku_objects[gcas] = SKUMeta(
+                    code=gcas,
+                    technology=tech,
+                    buffer_time_min=buffer_map.get(gcas, 0),
+                    bct_by_system=bct_map
+                )
+            except:
+                pass
 
         print(f"Successfully loaded {len(sku_objects)} SKUs.")
         return sku_objects
 
     def load_washout_rules(self) -> List[WashoutRule]:
-        rules = []
+        """
+        Parses Matrix-style washout sheets using Regex to find headers.
+        """
+        all_rules = []
+
         for sheet in config.SHEET_WASHOUT_LIST:
-            if sheet not in self.xl.sheet_names: continue
-
-            print(f"Scanning '{sheet}'...")
-            req_cols = list(config.COL_MAP_WASHOUT.values())
-            df = self._read_sheet_with_header_hunting(sheet, req_cols)
-
-            if df.empty:
-                print(f"   [SKIP] Empty or unreadable: {sheet}")
+            if sheet not in self.xl.sheet_names:
                 continue
 
+            print(f"Parsing Washout Matrix: '{sheet}'...")
+            df = self.xl.parse(sheet, header=None)
+
+            # 1. Map Columns to TO_SKUs by scanning the Header Row
+            to_gcas_map = {}  # {col_index: gcas_code}
+
             try:
-                df = self._normalize_cols(df, config.COL_MAP_WASHOUT)
-                sys_class = "ALL"
-                if "-" in sheet: sys_class = sheet.split("-")[1].strip()
+                header_row = df.iloc[config.WASHOUT_HEADER_ROW]
 
-                for _, row in df.iterrows():
-                    rules.append(WashoutRule(
-                        str(row['from_sku']).strip(),
-                        str(row['to_sku']).strip(),
-                        int(row['duration']),
-                        sys_class
-                    ))
+                for col_idx, val in enumerate(header_row):
+                    val_str = str(val)
+                    # Regex: Find 'Gcas' followed by digits, or just large integers
+                    # Matches "FOP Gcas 90275009" or "Gcas- 21055594"
+                    match = re.search(r'Gcas\s*[-: ]?\s*(\d+)', val_str, re.IGNORECASE)
+
+                    if match:
+                        gcas = match.group(1)
+                        to_gcas_map[col_idx] = gcas
+                    elif str(val).isdigit() and len(str(val)) > 6:
+                        # Fallback: if cell is just the number
+                        to_gcas_map[col_idx] = str(val).strip()
+
+                if not to_gcas_map:
+                    print(f"   [WARNING] No 'TO' GCAS codes found in Row {config.WASHOUT_HEADER_ROW} of {sheet}")
+                    continue
+
+                # 2. Iterate Data Rows for FROM_SKUs
+                for r in range(config.WASHOUT_DATA_START_ROW, len(df)):
+                    from_gcas = str(df.iloc[r, config.WASHOUT_FROM_COL]).strip()
+
+                    if not from_gcas or from_gcas.lower() == 'nan':
+                        continue
+
+                    # 3. Get Intersection Values
+                    for col_idx, to_gcas in to_gcas_map.items():
+                        raw_val = df.iloc[r, col_idx]
+
+                        duration = 0
+                        # Logic: 'x' usually means 0 (No Washout) or Standard?
+                        # Assuming 'x' = 0 (Compatible) for now.
+                        # If cell is a number (e.g., 45), that's the time.
+                        try:
+                            duration = int(raw_val)
+                        except:
+                            # Handle 'x', 'X', '-', or text
+                            if str(raw_val).lower().strip() == 'x':
+                                duration = 0
+                            else:
+                                duration = 0  # Default to 0 if unclear
+
+                        # We store ALL rules, even 0 min ones, to be explicit
+                        all_rules.append(WashoutRule(
+                            from_sku=from_gcas,
+                            to_sku=to_gcas,
+                            duration_min=duration,
+                            system_class=sheet
+                        ))
+
             except Exception as e:
-                print(f"   [SKIP] Error parsing {sheet}: {e}")
+                print(f"   [ERROR] Parsing failed for {sheet}: {e}")
 
-        print(f"Successfully loaded {len(rules)} washout rules.")
-        return rules
+        print(f"Successfully loaded {len(all_rules)} washout rules.")
+        return all_rules
 
     def save_plan_to_excel(self, batches, filename="draft_plan.xlsx"):
         path = os.path.join(config.OUTPUT_DIR, filename)

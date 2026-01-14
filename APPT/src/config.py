@@ -1,13 +1,12 @@
 import os
+import sys
 
-# --- PATH FIX ---
+# --- PATHS ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 base_dir_check = os.path.dirname(current_dir)
-import sys
 if base_dir_check not in sys.path:
     sys.path.insert(0, base_dir_check)
 
-# --- PATHS ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INPUT_DIR = os.path.join(BASE_DIR, 'data', 'input')
 OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'output')
@@ -17,9 +16,8 @@ os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # --- SHEET NAMES ---
-SHEET_BCT = "BCT Data "  # Note the trailing space!
+SHEET_BCT = "BCT Data "
 SHEET_BUFFER = "Buffer Time"
-
 SHEET_WASHOUT_LIST = [
     "Washout Matrix - FMT",
     "Washout Matrix - 6T MMT",
@@ -27,25 +25,32 @@ SHEET_WASHOUT_LIST = [
     "Washout Matrix - PST"
 ]
 
-# --- COLUMN MAPPINGS ---
-# The code will now search for a row containing these specific headers.
+# --- PARSING CONFIGURATION ---
 
-COL_MAP_BCT = {
-    "sku": "Material",         # We look for a row containing 'Material'
-    "system": "System",
-    "technology": "Technology",
-    "bct_min": "Cycle Time (min)" # Adjust if actual column is just "Cycle Time"
+# BCT SHEET
+BCT_HEADER_ROW = 6
+BCT_DATA_START_ROW = 8
+BCT_COL_GCAS = 1
+BCT_COL_DESC = 2
+BCT_COL_TECH = 0
+BCT_SYSTEM_MAP = {
+    6: "12T PST",
+    7: "12T Ronchi",
+    8: "6T PST",
+    9: "6T Ronchi"
 }
 
-COL_MAP_WASHOUT = {
-    "from_sku": "From Material", # We look for 'From Material'
-    "to_sku": "To Material",
-    "duration": "Washout Time (min)"
-}
+# WASHOUT MATRIX (UPDATED)
+# Row 5 contains descriptions like "H&S... (FOP Gcas 12345)"
+WASHOUT_HEADER_ROW = 5
+WASHOUT_DATA_START_ROW = 8
+WASHOUT_FROM_COL = 2     # Column containing the "From" GCAS
+# We will verify "TO" columns dynamically by scanning Row 5 for "Gcas"
 
+# BUFFER SHEET
 COL_MAP_BUFFER = {
-    "sku": "GCAS",             # Found in inspection: 'GCAS'
-    "buffer_min": "Settling Time (Normal)" # Found in inspection
+    "sku": "GCAS",
+    "buffer_min": "Settling Time (Normal)"
 }
 
 # --- PRODUCTION CONSTANTS ---
