@@ -14,9 +14,7 @@ from src.excel_io import MasterDataLoader
 
 
 def main():
-    print("==========================================")
     print("   AUTO PRODUCTION PLANNER - PHASE 1      ")
-    print("==========================================")
 
     # Define file path
     data_path = os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE)
@@ -54,7 +52,7 @@ def main():
         # For Phase 1, we save an empty plan just to prove I/O works
         loader.save_plan_to_excel([], "draft_plan_phase1.xlsx")
 
-        print("\n[SUCCESS] Phase 1 Complete. Infrastructure is ready.")
+        print("\n[SUCCESS] Phase 1 Complete.")
 
     except ValueError as ve:
         print(f"\n[DATA ERROR] {ve}")

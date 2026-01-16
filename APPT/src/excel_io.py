@@ -108,7 +108,7 @@ class MasterDataLoader:
                         to_gcas_map[col_idx] = str(val).strip()
 
                 if not to_gcas_map:
-                    print(f"   [WARNING] No 'TO' GCAS codes found in Row {config.WASHOUT_HEADER_ROW} of {sheet}")
+                    #print(f"   [WARNING] No 'TO' GCAS codes found in Row {config.WASHOUT_HEADER_ROW} of {sheet}")
                     continue
 
                 # 2. Iterate Data Rows for FROM_SKUs
