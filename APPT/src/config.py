@@ -1,11 +1,22 @@
 import os
 import sys
+from dotenv import load_dotenv
 
 # --- PATHS ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 base_dir_check = os.path.dirname(current_dir)
 if base_dir_check not in sys.path:
     sys.path.insert(0, base_dir_check)
+
+# ENV LOADING
+load_dotenv(os.path.join(base_dir_check, '.env'))
+
+# --- DATABASE CONFIGURATION ---
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "3306")
+DB_NAME = os.getenv("DB_NAME")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INPUT_DIR = os.path.join(BASE_DIR, 'data', 'input')
