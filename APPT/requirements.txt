@@ -3,3 +3,4 @@ numpy<2.0.0
 openpyxl==3.1.2
 pydantic==2.5.3  # For strict data validation
 xlsxwriter==3.1.9
+sqlalchemy pymysql

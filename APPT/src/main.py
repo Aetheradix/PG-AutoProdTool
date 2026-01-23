@@ -11,12 +11,29 @@ if project_root not in sys.path:
 # --- IMPORTS ---
 from src import config
 from src.excel_io import MasterDataLoader
-
+import pandas as pd
+from db_connect import get_db_engine  # Import the function we just wrote
 
 def main():
     print("   AUTO PRODUCTION PLANNER - PHASE 1      ")
 
-    # Define file path
+    # 1. Get the connection ==========================================SQL DB (Replace later when SQL access Provided)
+    engine = get_db_engine()
+    print("Database connected successfully.")
+
+    # 2. Run your logic (Example: Read data)
+    query = "SELECT * FROM rm_data LIMIT 20;"
+    df = pd.read_sql(query, engine)
+
+    # 3. Process data
+    print(f"Loaded {len(df)} rows.")
+    # 4. Print test rows:
+    print("Here are the first 10 rows:")
+    print(df.head(20))
+    # =================================================================SQL DB (Replace later when SQL access Provided)
+
+
+    # Define file path ==============================================This is for Excel Master Data File
     data_path = os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE)
 
     # Initialize Loader
