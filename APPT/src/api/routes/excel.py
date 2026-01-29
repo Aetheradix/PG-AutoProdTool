@@ -24,7 +24,7 @@ async def upload_excel_data(data: List[Dict[str, Any]] = Body(...)):
        
         df.to_excel(output_path, index=False)
         
-        print(f"Successfully saved {len(data)} rows to {output_path}")
+        # print(f"Successfully saved {len(data)} rows to {output_path}")
         
         return {
             "status": "success",
