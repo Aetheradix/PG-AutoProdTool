@@ -7,43 +7,47 @@ router = APIRouter()
 
 @router.get("/status")
 async def get_status(
+    latest_data: bool = Query(default=True, description="Fetch latest data with colour & status mapping"),
     limit: int = Query(default=100, ge=1, le=1000)
 ):
     """
-    Returns TTS data with colour & status mapping for frontend
+    Returns TTS data with colour & status mapping for frontend, dynamically detecting date columns.
     """
     try:
         engine = get_db_engine()
 
-        query = text("""
+        col_query = text("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'tts_raw_data'")
+        with engine.connect() as conn:
+            result = conn.execute(col_query)
+            # Converts query result into a Python list
+            # ['ID', 'COLOR', 'DT#_A_#', 'DT#_B_#']
+            all_columns = [row[0] for row in result] # converting 
+            print(all_columns)
+
+        
+        date_cols = [col for col in all_columns if col.startswith("DT#_") and col.endswith("_#")] 
+        print(f"Detected date columns: {date_cols}")
+
+        if not date_cols:
+           
+            latest_dt_clause = "NULL"
+        else:
+            date_expressions = [
+                f"NULLIF(STR_TO_DATE(`{col}`, '%W, %M %d, %Y %H:%i:%s'), '')"
+                for col in date_cols
+            ]
+          
+            latest_dt_clause = f"GREATEST({', '.join(date_expressions)})"
+            
+
+
+        query = text(f"""
         SELECT 
             t.*,
             c.color_name,
             c.hex_code,
             c.status,
-
-            GREATEST(
-                NULLIF(STR_TO_DATE(t.`DT#_0_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_1_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_2_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_3_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_4_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_5_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_6_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_8_#`,  '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_10_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_12_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_15_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_16_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_19_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_20_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_23_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_24_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_27_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_28_#`, '%W, %M %d, %Y %H:%i:%s'), ''),
-                NULLIF(STR_TO_DATE(t.`DT#_31_#`, '%W, %M %d, %Y %H:%i:%s'), '')
-            ) AS latest_dt
-
+            {latest_dt_clause} AS latest_dt
         FROM tts_raw_data t
         LEFT JOIN colour_status_master c
             ON t.COLOR = c.colour_number
@@ -52,6 +56,9 @@ async def get_status(
         """)
 
         df = pd.read_sql(query, engine, params={"limit": limit})
+        if latest_data:
+            df = df.drop_duplicates(subset=['ID'], keep='first')
+            df = df.head(limit)
 
         return {
             "success": True,
