@@ -5,13 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8e094196-47f9-4b6f-aa09-e2267cdcd33b" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/APPT/__init__.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/APPT/src/scheduler.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/data/output/draft_plan_phase1.xlsx" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/src/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/src/excel_io.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/excel_io.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/src/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/main.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/src/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/src/scheduler.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/scheduler.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -59,6 +59,7 @@
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "Python.app.executor": "Run",
     "Python.columns.executor": "Run",
+    "Python.debug_layout.executor": "Run",
     "Python.debug_view.executor": "Run",
     "Python.excel_io.executor": "Run",
     "Python.inspect_data.executor": "Run",
@@ -72,7 +73,7 @@
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "ai.playground.ignore.import.keys.banner.in.settings": "true",
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "feat/pratyush/scheduling-engine",
+    "git-widget-placeholder": "main",
     "ignore.virus.scanning.warn.message": "true",
     "junie.onboarding.icon.badge.shown": "true",
     "last_opened_file_path": "C:/Users/Pratyush/Desktop/ARX/ARX-SFA Projects/P&G/PG-AutoProdTool",
