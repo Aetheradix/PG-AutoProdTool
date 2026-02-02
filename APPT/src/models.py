@@ -6,6 +6,7 @@ from datetime import datetime
 class SKUMeta:
     """Static master data for a single SKU."""
     code: str
+    description: str
     technology: str
     buffer_time_min: int = 0
     bct_by_system: Dict[str, float] = field(default_factory=dict)
@@ -24,7 +25,7 @@ class Demand:
     sku_code: str
     description: str
     quantity: float
-    packing_start_dt: datetime  # Exact Date & Time packing starts
+    packing_start_dt: datetime
     line: str
 
 @dataclass
