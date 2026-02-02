@@ -22,11 +22,9 @@ async def get_status(
             # Converts query result into a Python list
             # ['ID', 'COLOR', 'DT#_A_#', 'DT#_B_#']
             all_columns = [row[0] for row in result] # converting 
-            print(all_columns)
 
         
         date_cols = [col for col in all_columns if col.startswith("DT#_") and col.endswith("_#")] 
-        print(f"Detected date columns: {date_cols}")
 
         if not date_cols:
            
