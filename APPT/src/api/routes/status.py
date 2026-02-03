@@ -85,6 +85,15 @@ async def get_rm_data():
             df = df[df["current_value"] > 0]
 
         df["hex_code"] = np.where(df["status"] == True, "#28a745", "#dc3545")
+        
+        # Rename perfume tanks to Victoria Tank Level
+        rename_map = {
+            "Perfume1_Tank_Level": "FASCINATING_TANK_LEVEL",
+            "Perfume2_Tank_Level": "GIRL_SQUAD_TANK_LEVEL",
+            "Perfume3_Tank_Level": "VICTORIA_TANK_LEVEL"
+        }
+        df["tank_name"] = df["tank_name"].replace(rename_map)
+
         df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
 
         return {"success": True, "count": len(df), "data": df.to_dict(orient="records")}
