@@ -23,26 +23,8 @@ app.add_middleware(
 app.include_router(status.router, prefix="/api/v1", tags=["Status"])
 app.include_router(recent_data.router, prefix="/api/v1", tags=["Recent Data"])
 app.include_router(excel.router, prefix="/api/excel", tags=["Excel"])
+app.include_router(status.router, prefix="/api/v1", tags=["RM Data"])
 
-@app.get("/data")
-def get_data(limit: int = 10):
-    """
-    Fetch records from the rm_data table.
-    Defaults to 10 records.
-    """
-    try:
-        engine = get_db_engine()
-        query = f"SELECT * FROM rm_data LIMIT {limit}"
-        
-        df = pd.read_sql(query, engine)
-        
-        result = df.to_dict(orient="records")
-        return result
-    except Exception as e:
-        
-        print(f"Error fetching data: {e}")
-        
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 def read_root():
