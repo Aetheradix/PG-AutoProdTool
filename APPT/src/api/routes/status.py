@@ -80,6 +80,13 @@ async def get_rm_data():
         query = text("SELECT * FROM rm_status_data") 
 
         df = pd.read_sql(query, engine)
+
+        time_query = text("SELECT MAX(DateandTime) FROM rm_data")
+        with engine.connect() as conn:
+            latest_time = conn.execute(time_query).scalar()
+        
+        
+
         
         if "current_value" in df.columns:
             df = df[df["current_value"] > 0]
@@ -96,7 +103,12 @@ async def get_rm_data():
 
         df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
 
-        return {"success": True, "count": len(df), "data": df.to_dict(orient="records")}
+        return {
+            "success": True, 
+            "count": len(df), 
+            "DateandTime": latest_time.strftime("%Y-%m-%d %H:%M:%S") if latest_time else None,
+            "data": df.to_dict(orient="records")
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
