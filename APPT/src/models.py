@@ -1,36 +1,34 @@
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import Dict
 from datetime import datetime
+
 
 @dataclass
 class SKUMeta:
-    """Static master data for a single SKU."""
-    code: str
+    """Master Data for a single Bulk SKU."""
+    gcas: str
     description: str
     technology: str
-    buffer_time_min: int = 0
+    # Maps System Name -> Cycle Time (Minutes)
     bct_by_system: Dict[str, float] = field(default_factory=dict)
 
-@dataclass
-class WashoutRule:
-    from_sku: str
-    to_sku: str
-    duration_min: int
-    system_class: str = "ALL"
 
 @dataclass
 class Demand:
-    """Represents a row from the SAP Packing Plan."""
-    id: str
-    sku_code: str
+    """A row from the Packing Plan."""
+    order_id: str
+    material_code: str  # The Finished Good code (e.g. 839...)
     description: str
+    start_dt: datetime
     quantity: float
-    packing_start_dt: datetime
-    line: str
+    # These are filled by the Enricher
+    bulk_gcas: str = None
+    system: str = None
+
 
 @dataclass
 class ProductionBatch:
-    """A scheduled bulk making batch."""
+    """A scheduled production event."""
     id: str
     sku_code: str
     system: str
@@ -38,5 +36,4 @@ class ProductionBatch:
     start_dt: datetime
     end_dt: datetime
     duration_min: int
-    type: str = "NORMAL"
-    linked_demand_id: str = ""
+    linked_order: str

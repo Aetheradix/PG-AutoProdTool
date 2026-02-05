@@ -16,96 +16,57 @@ DB_PORT = os.getenv("DB_PORT", "3306")
 DB_NAME = os.getenv("DB_NAME")
 # --- DATABASE CONFIG END ---
 
+# --- PATHS SETUP ---
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INPUT_DIR = os.path.join(BASE_DIR, 'data', 'input')
 OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'output')
-MASTER_DATA_FILE = "Master Data - Auto Production Planning.xlsm"
-PACKING_PLAN_FILE = "packing_plan.xlsx"
 
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- SHEET NAMES ---
-SHEET_BCT = "BCT Data "
-SHEET_BUFFER = "Buffer Time"
-SHEET_PACKING = 0
-SHEET_WASHOUT_LIST = [
-    "Washout Matrix - FMT",
-    "Washout Matrix - 6T MMT",
-    "Washout Matrix - 12T MMT",
-    "Washout Matrix - PST"
-]
+# --- FILE NAMES ---
+MASTER_DATA_FILE = "Master Data - Test.xlsx"
+PACKING_PLAN_FILE = "packing_plan_Test-System06Jan.xlsx"
 
-# --- MAPPING CONFIG ---
-# BCT Sheet
-BCT_HEADER_ROW = 6
-BCT_DATA_START_ROW = 8
-BCT_COL_TECH = 0
-BCT_COL_GCAS = 1
-BCT_COL_DESC = 2
-BCT_SYSTEM_MAP = {6: "12T PST", 7: "12T Ronchi", 8: "6T PST", 9: "6T Ronchi"}
+# --- MASTER DATA CONFIG ---
+SHEET_MASTER_DATA = 0
+MASTER_HEADER_ROW = 0
 
-# Washout
-WASHOUT_HEADER_ROW = 5
-WASHOUT_BULK_ROW = 6
-WASHOUT_DATA_START_ROW = 8
-WASHOUT_FROM_COL = 2
+SHEET_BULK_VARIANT = "Bulk Variant"
+BULK_VARIANT_HEADER_ROW = 1
 
-# Packing Plan (SAP Export Headers)
-COL_MAP_PACKING = {
-    "id": "Order",
-    "sku": "Material",
-    "description": "Description",
-    "start_date": "Start Date",
-    "start_time": "Start Time",
-    "quantity": "Planned Quantity",
-    "line": "Production Line"
+COL_IDX_TECH = 0
+COL_IDX_GCAS = 1
+COL_IDX_DESC = 2
+
+# System Mapping
+SYSTEM_COL_MAP = {
+    10: "12T FMT",
+    11: "12T MMT",
+    12: "6T FMT",
+    13: "6T MMT"
 }
 
-# Buffer
-COL_MAP_BUFFER = {"sku": "GCAS", "buffer_min": "Settling Time (Normal)"}
-
-# Constants
-SHIFT_START_TIMES = {"B": (7, 0), "C": (15, 0), "A": (23, 0)}
-# --- SHEET NAMES ---
-SHEET_BCT = "BCT Data "
-SHEET_BUFFER = "Buffer Time"
+# --- PACKING PLAN CONFIG ---
 SHEET_PACKING = 0
-SHEET_WASHOUT_LIST = [
-    "Washout Matrix - FMT",
-    "Washout Matrix - 6T MMT",
-    "Washout Matrix - 12T MMT",
-    "Washout Matrix - PST"
+COL_PACK_ORDER = "Order"
+COL_PACK_MATERIAL = "Material"
+COL_PACK_DESC = "Description"
+COL_PACK_DATE = "Start Date"
+COL_PACK_TIME = "Start Time"
+COL_PACK_QTY = "Planned Quantity"
+COL_PACK_LINE = "Production Line"
+
+# --- OUTPUT CONFIG ---
+OUTPUT_COLUMNS = [
+    "Production Line", "Order", "Material", "Description",
+    "Batch ID", "GCAS", "System", "Start Time", "End Time", "Duration (min)"
 ]
 
-# --- MAPPING CONFIG ---
-# BCT Sheet
-BCT_HEADER_ROW = 6
-BCT_DATA_START_ROW = 8
-BCT_COL_TECH = 0
-BCT_COL_GCAS = 1
-BCT_COL_DESC = 2  # <--- ENSURE THIS IS PRESENT
-BCT_SYSTEM_MAP = {6: "12T PST", 7: "12T Ronchi", 8: "6T PST", 9: "6T Ronchi"}
-
-# Washout
-WASHOUT_HEADER_ROW = 5
-WASHOUT_BULK_ROW = 6
-WASHOUT_DATA_START_ROW = 8
-WASHOUT_FROM_COL = 2
-
-# Packing Plan
-COL_MAP_PACKING = {
-    "id": "Order",
-    "sku": "Material",
-    "description": "Description",
-    "start_date": "Start Date",
-    "start_time": "Start Time",
-    "quantity": "Planned Quantity",
-    "line": "Production Line"
+# --- RULES ---
+SPECIAL_SYSTEM_RULES = {
+    "climbazole": "1.25T"
 }
 
-# Buffer
-COL_MAP_BUFFER = {"sku": "GCAS", "buffer_min": "Settling Time (Normal)"}
-
-# Constants
+DEFAULT_DURATION = 90  # <--- NEW: Fallback time if GCAS not found
 SHIFT_START_TIMES = {"B": (7, 0), "C": (15, 0), "A": (23, 0)}
