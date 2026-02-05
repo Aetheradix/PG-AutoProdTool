@@ -1,34 +1,31 @@
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Optional
 from datetime import datetime
-
 
 @dataclass
 class SKUMeta:
-    """Master Data for a single Bulk SKU."""
     gcas: str
     description: str
     technology: str
-    # Maps System Name -> Cycle Time (Minutes)
+    tech_class: str = "Single"  # "Single" or "Dual"
     bct_by_system: Dict[str, float] = field(default_factory=dict)
 
+@dataclass
+class VariantInfo:
+    gcas: str
+    weight_per_container: float = 0.0
 
 @dataclass
 class Demand:
-    """A row from the Packing Plan."""
     order_id: str
-    material_code: str  # The Finished Good code (e.g. 839...)
+    material_code: str
     description: str
-    start_dt: datetime
     quantity: float
-    # These are filled by the Enricher
-    bulk_gcas: str = None
-    system: str = None
-
+    start_dt: datetime
+    line: str = ""
 
 @dataclass
 class ProductionBatch:
-    """A scheduled production event."""
     id: str
     sku_code: str
     system: str
@@ -37,3 +34,9 @@ class ProductionBatch:
     end_dt: datetime
     duration_min: int
     linked_order: str
+    # Extra fields
+    material: str = ""
+    desc: str = ""
+    total_msu: float = 0.0
+    line: str = ""
+    tech_type: str = "" # To display Single/Dual in output

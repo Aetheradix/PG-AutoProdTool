@@ -13,12 +13,10 @@ from src.logic import PlanEnricher, Scheduler
 from db_connect import get_db_engine  # Import the function we just wrote
 # Path fix
 
-
-
 def main():
-    print("==========================================")
-    print("   AUTO PRODUCTION PLANNER - PHASE 3      ")
-    print("==========================================")
+    print("===============================================")
+    print("   AUTO PRODUCTION PLANNER - PHASE 4 - Logic   ")
+    print("===============================================")
     # 1. Get the connection ==========================================SQL DB (Replace later when SQL access Provided)
     engine = get_db_engine()
     print("Database connected successfully.")
@@ -27,18 +25,18 @@ def main():
     #query = "SELECT * FROM rm_data LIMIT 20;"
     #df = pd.read_sql(query, engine)
     # =================================================================SQL DB (Replace later when SQL access Provided)
-
     master_path = os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE)
     packing_path = os.path.join(config.INPUT_DIR, config.PACKING_PLAN_FILE)
 
     loader = DataLoader(master_path, packing_path)
     try:
-        # Load all 3 data sources
         master_data = loader.load_master_data()
-        bulk_map = loader.load_bulk_variant_map()  # <--- New
+        bulk_map = loader.load_bulk_variant_map()
         demands = loader.load_packing_plan()
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         return
 
     enricher = PlanEnricher(master_data, bulk_map)
@@ -58,6 +56,8 @@ def main():
                 "Description": b.desc,
                 "Batch ID": b.id,
                 "GCAS": b.sku_code,
+                "Tech Type": b.tech_type,
+                "Total MSU": round(b.total_msu, 4),
                 "System": b.system,
                 "Start Time": b.start_dt,
                 "End Time": b.end_dt,
@@ -65,7 +65,6 @@ def main():
             })
 
         df_out = pd.DataFrame(data)
-        # Reorder columns as requested
         df_out = df_out[config.OUTPUT_COLUMNS]
 
         out_path = os.path.join(config.OUTPUT_DIR, "Final_Production_Plan.xlsx")
