@@ -3,8 +3,6 @@ import sys
 from dotenv import load_dotenv
 
 # --- PATHS SETUP ---
-# 1. Define Base Directory (Project Root)
-# src/config.py -> src/ -> APPT/
 current_dir = os.path.dirname(os.path.abspath(__file__))
 base_dir_check = os.path.dirname(current_dir)
 if base_dir_check not in sys.path:
@@ -17,8 +15,6 @@ OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'output')
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- DATABASE CONFIGURATION ---
-# Load .env file from the project root (APPT/.env)
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 DB_USER = os.getenv("DB_USER")
@@ -27,14 +23,13 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "3306")
 DB_NAME = os.getenv("DB_NAME")
 
-# --- FILE NAMES (EXCEL FALLBACKS) ---
+# --- FILE NAMES ---
 MASTER_DATA_FILE = "Master Data - Test.xlsx"
 PACKING_PLAN_FILE = "packing_plan.xlsx"
 
 # --- MASTER DATA CONFIG ---
 SHEET_MASTER_DATA = 0
 MASTER_HEADER_ROW = 0
-
 SHEET_BULK_VARIANT = "Bulk Variant"
 BULK_VARIANT_HEADER_ROW = 1
 
@@ -47,7 +42,6 @@ COL_VAR_DESC = "Description"
 COL_VAR_GCAS = "Bulk GCAS"
 COL_VAR_WEIGHT = "Weight per Container (KG)"
 
-# System Mapping
 SYSTEM_COL_MAP = {
     10: "12T FMT",
     11: "12T MMT",
@@ -60,15 +54,19 @@ SHEET_PACKING = 0
 COL_PACK_ORDER = "Order"
 COL_PACK_MATERIAL = "Material"
 COL_PACK_DESC = "Description"
-COL_PACK_DATE = "Start Date"
-COL_PACK_TIME = "Start Time"
 COL_PACK_QTY = "Planned Quantity"
 COL_PACK_LINE = "Production Line"
+COL_PACK_START_DATE = "Start Date"
+COL_PACK_START_TIME = "Start Time"
+COL_PACK_END_DATE = "End Date"
+COL_PACK_END_TIME = "End Time"
 
 # --- OUTPUT CONFIG ---
 OUTPUT_COLUMNS = [
     "Production Line", "Order", "Material", "Description",
-    "Batch ID", "GCAS", "System", "Total MSU", "Tech Type", "Start Time", "End Time", "Duration (min)"
+    "Batch ID", "GCAS", "System", "Total MSU", "Tech Type",
+    "Shift", "Mkg Start Time", "BCT (min)", "Mkg End Time", "Buffer (min)",
+    "Pkg Start Time", "Pkg End Time"
 ]
 
 # --- BUSINESS RULES ---
@@ -81,5 +79,24 @@ MATCHING_NOISE_WORDS = ["IN GST", "GST", "FC", "PROMO", "NFS", "IN"]
 MSU_UNIT_KG = 2571.0
 MSU_THRESHOLD_6T = 2.3
 
+BUFFER_STD = 120
+BUFFER_COND = 1440
 DEFAULT_DURATION = 90
-SHIFT_START_TIMES = {"B": (7, 0), "C": (15, 0), "A": (23, 0)}
+
+# --- SHIFT LOGIC (UPDATED) ---
+# A: 07:30 - 15:30
+# B: 15:30 - 23:30
+# C: 23:30 - 07:30
+SHIFT_TIMES = {
+    "A_START": (7, 30),
+    "B_START": (15, 30),
+    "C_START": (23, 30)
+}
+
+# Blackout Windows (Shift Handover)
+# Format: Start (H, M), End (H, M), Snap-To (H, M)
+SHIFT_CONSTRAINTS = [
+    {"start": (7, 15), "end": (7, 45), "snap": (7, 15)},   # C -> A
+    {"start": (15, 15), "end": (15, 45), "snap": (15, 15)}, # A -> B
+    {"start": (23, 15), "end": (23, 45), "snap": (23, 15)}  # B -> C
+]

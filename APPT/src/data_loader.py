@@ -27,7 +27,6 @@ class DataLoader:
 
         variant_map = {}
         df.columns = df.columns.astype(str).str.strip()
-
         col_desc = next((c for c in df.columns if config.COL_VAR_DESC in c), config.COL_VAR_DESC)
         col_gcas = next((c for c in df.columns if config.COL_VAR_GCAS in c), config.COL_VAR_GCAS)
         col_weight = next((c for c in df.columns if config.COL_VAR_WEIGHT in c), None)
@@ -35,7 +34,6 @@ class DataLoader:
         for _, row in df.iterrows():
             desc = str(row.get(col_desc, "")).strip()
             gcas = self._clean_gcas(row.get(col_gcas, ""))
-
             weight = 0.0
             if col_weight:
                 try:
@@ -46,7 +44,6 @@ class DataLoader:
 
             if desc and gcas:
                 variant_map[desc] = VariantInfo(gcas=gcas, weight_per_container=weight)
-
         print(f"Loaded {len(variant_map)} variants.")
         return variant_map
 
@@ -61,21 +58,18 @@ class DataLoader:
         col_single_dual_idx = config.COL_IDX_SINGLE_DUAL
         for idx, col_name in enumerate(df.columns):
             if "Single" in str(col_name) and "Dual" in str(col_name):
-                col_single_dual_idx = idx
+                col_single_dual_idx = idx;
                 break
 
         for i, row in df.iterrows():
             gcas = self._clean_gcas(row.iloc[config.COL_IDX_GCAS])
             if not gcas: continue
-
             desc = str(row.iloc[config.COL_IDX_DESC]).strip()
             tech = str(row.iloc[config.COL_IDX_TECH]).strip()
-
             tech_class = "Single"
             try:
                 val = str(row.iloc[col_single_dual_idx]).strip()
-                if "dual" in val.lower():
-                    tech_class = "Dual"
+                if "dual" in val.lower(): tech_class = "Dual"
             except:
                 pass
 
@@ -87,13 +81,33 @@ class DataLoader:
                         bct_map[sys_name] = float(val)
                 except:
                     pass
-
-            sku_obj = SKUMeta(gcas=gcas, description=desc, technology=tech, tech_class=tech_class,
-                              bct_by_system=bct_map)
-            sku_map[gcas] = sku_obj
-
+            sku_map[gcas] = SKUMeta(gcas=gcas, description=desc, technology=tech, tech_class=tech_class,
+                                    bct_by_system=bct_map)
         print(f"Loaded {len(sku_map)} Master SKUs.")
         return sku_map
+
+    def _parse_dt(self, row, col_date, col_time):
+        """Helper to combine Date and Time columns."""
+        d_val = row.get(col_date)
+        t_val = row.get(col_time)
+        try:
+            if pd.isna(d_val) or pd.isna(t_val): return None
+
+            if isinstance(d_val, datetime):
+                d_part = d_val.date()
+            else:
+                d_part = pd.to_datetime(d_val, dayfirst=True).date()
+
+            if isinstance(t_val, datetime):
+                t_part = t_val.time()
+            elif hasattr(t_val, 'hour'):
+                t_part = t_val
+            else:
+                t_part = pd.to_datetime(str(t_val)).time()
+
+            return datetime.combine(d_part, t_part)
+        except:
+            return None
 
     def load_packing_plan(self) -> List[Demand]:
         print(f"Loading Packing Plan...")
@@ -105,38 +119,24 @@ class DataLoader:
         demands = []
         for _, row in df.iterrows():
             try:
-                # Essential fields
                 order = str(row.get(config.COL_PACK_ORDER, ""))
                 mat = str(row.get(config.COL_PACK_MATERIAL, ""))
                 desc = str(row.get(config.COL_PACK_DESC, ""))
                 qty = float(row.get(config.COL_PACK_QTY, 0))
                 line = str(row.get(config.COL_PACK_LINE, ""))
 
-                # Date/Time Parsing
-                d_val = row.get(config.COL_PACK_DATE)
-                t_val = row.get(config.COL_PACK_TIME)
-                dt_obj = datetime.now()
-                try:
-                    if isinstance(d_val, datetime):
-                        d_part = d_val.date()
-                    else:
-                        d_part = pd.to_datetime(d_val, dayfirst=True).date()
-                    if isinstance(t_val, datetime):
-                        t_part = t_val.time()
-                    elif hasattr(t_val, 'hour'):
-                        t_part = t_val
-                    else:
-                        t_part = pd.to_datetime(str(t_val)).time()
-                    dt_obj = datetime.combine(d_part, t_part)
-                except:
-                    pass
+                # Parse Start and End
+                dt_start = self._parse_dt(row, config.COL_PACK_START_DATE, config.COL_PACK_START_TIME)
+                dt_end = self._parse_dt(row, config.COL_PACK_END_DATE, config.COL_PACK_END_TIME)
 
-                # Note: We completely ignore GCAS/System columns from input here.
-                # Logic engine handles it.
+                # If Start exists but End is missing, assume 0 duration for now (or handle logic)
+                if not dt_start: continue
+                if not dt_end: dt_end = dt_start
 
-                demands.append(
-                    Demand(order_id=order, material_code=mat, description=desc, quantity=qty, start_dt=dt_obj,
-                           line=line))
+                demands.append(Demand(
+                    order_id=order, material_code=mat, description=desc,
+                    quantity=qty, pkg_start_dt=dt_start, pkg_end_dt=dt_end, line=line
+                ))
             except:
                 continue
         return demands

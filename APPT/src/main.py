@@ -14,9 +14,9 @@ from db_connect import get_db_engine  # Import the function we just wrote
 # Path fix
 
 def main():
-    print("===============================================")
-    print("   AUTO PRODUCTION PLANNER - PHASE 4 - Logic   ")
-    print("===============================================")
+    print("====================================================")
+    print("   AUTO PRODUCTION PLANNER - PHASE 5 - Scheduling   ")
+    print("====================================================")
     # 1. Get the connection ==========================================SQL DB (Replace later when SQL access Provided)
     engine = get_db_engine()
     print("Database connected successfully.")
@@ -56,12 +56,16 @@ def main():
                 "Description": b.desc,
                 "Batch ID": b.id,
                 "GCAS": b.sku_code,
-                "Tech Type": b.tech_type,
-                "Total MSU": round(b.total_msu, 4),
                 "System": b.system,
-                "Start Time": b.start_dt,
-                "End Time": b.end_dt,
-                "Duration (min)": b.duration_min
+                "Total MSU": round(b.total_msu, 4),
+                "Tech Type": b.tech_type,
+                "Shift": b.shift,  # <--- NEW FIELD
+                "Mkg Start Time": b.mkg_start_dt,
+                "BCT (min)": b.bct,
+                "Mkg End Time": b.mkg_end_dt,
+                "Buffer (min)": b.buffer_min,
+                "Pkg Start Time": b.pkg_start_dt,
+                "Pkg End Time": b.pkg_end_dt
             })
 
         df_out = pd.DataFrame(data)
