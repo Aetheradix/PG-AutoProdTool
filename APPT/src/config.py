@@ -25,7 +25,13 @@ DB_NAME = os.getenv("DB_NAME")
 
 # --- FILE NAMES ---
 MASTER_DATA_FILE = "Master Data - Test.xlsx"
-PACKING_PLAN_FILE = "packing_plan.xlsx"
+PACKING_PLAN_FILE = "packing_plan_14th Jan.xlsx"
+
+# Washout Matrices
+WO_FILE_FMT = "FMT_WO_flat.csv"
+WO_FILE_MMT_6T = "MMT_6T_flat.csv"
+WO_FILE_MMT_12T = "MMT_12T_flat.csv"
+WO_FILE_PST = "PST_WO_flat.csv"
 
 # --- MASTER DATA CONFIG ---
 SHEET_MASTER_DATA = 0
@@ -42,11 +48,13 @@ COL_VAR_DESC = "Description"
 COL_VAR_GCAS = "Bulk GCAS"
 COL_VAR_WEIGHT = "Weight per Container (KG)"
 
+# CONDENSED SYSTEM MAPPING
+# Merging FMT and MMT columns into generic tank sizes
 SYSTEM_COL_MAP = {
-    10: "12T FMT",
-    11: "12T MMT",
-    12: "6T FMT",
-    13: "6T MMT"
+    10: "12T",  # Was 12T FMT
+    11: "12T",  # Was 12T MMT
+    12: "6T",   # Was 6T FMT
+    13: "6T"    # Was 6T MMT
 }
 
 # --- PACKING PLAN CONFIG ---
@@ -82,21 +90,11 @@ MSU_THRESHOLD_6T = 2.3
 BUFFER_STD = 120
 BUFFER_COND = 1440
 DEFAULT_DURATION = 90
+WASHOUT_DURATION = 20
 
-# --- SHIFT LOGIC (UPDATED) ---
-# A: 07:30 - 15:30
-# B: 15:30 - 23:30
-# C: 23:30 - 07:30
-SHIFT_TIMES = {
-    "A_START": (7, 30),
-    "B_START": (15, 30),
-    "C_START": (23, 30)
-}
-
-# Blackout Windows (Shift Handover)
-# Format: Start (H, M), End (H, M), Snap-To (H, M)
+SHIFT_TIMES = {"A_START": (7, 30), "B_START": (15, 30), "C_START": (23, 30)}
 SHIFT_CONSTRAINTS = [
-    {"start": (7, 15), "end": (7, 45), "snap": (7, 15)},   # C -> A
-    {"start": (15, 15), "end": (15, 45), "snap": (15, 15)}, # A -> B
-    {"start": (23, 15), "end": (23, 45), "snap": (23, 15)}  # B -> C
+    {"start": (7, 15), "end": (7, 45), "snap": (7, 15)},
+    {"start": (15, 15), "end": (15, 45), "snap": (15, 15)},
+    {"start": (23, 15), "end": (23, 45), "snap": (23, 15)}
 ]
