@@ -19,7 +19,7 @@ pip-delete-this-directory.txt
 .idea/
 
 # Project Data
-data/output/
+
 *.log
 
 # Excel temporary files
