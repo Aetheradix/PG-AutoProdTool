@@ -25,18 +25,14 @@ class PlanEnricher:
     def find_variant_for_demand(self, demand: Demand) -> Optional[VariantInfo]:
         original_desc = demand.description.strip()
         if original_desc in self.bulk_map: return self.bulk_map[original_desc]
-
         demand_clean = self._normalize_text(original_desc)
         if demand_clean in self.clean_bulk_map: return self.clean_bulk_map[demand_clean]
-
         for key, variant in self.clean_bulk_map.items():
             if len(demand_clean) > 5 and (demand_clean in key or key in demand_clean):
                 return variant
-
         desc_lower = original_desc.lower()
         for keyword in config.RULE_CLIMBAZOLE:
-            if keyword in desc_lower:
-                return VariantInfo(gcas="PREMIX_CLIMBAZOLE", weight_per_container=0)
+            if keyword in desc_lower: return VariantInfo(gcas="PREMIX_CLIMBAZOLE", weight_per_container=0)
         return None
 
     def calculate_msu(self, quantity: float, weight_per_container: float) -> float:
@@ -46,32 +42,28 @@ class PlanEnricher:
     def select_system(self, demand: Demand, sku: SKUMeta, variant: VariantInfo) -> Tuple[str, float, float]:
         desc_lower = str(demand.description).lower()
 
+        # 1. Climbazole
         for kw in config.RULE_CLIMBAZOLE:
             if kw in desc_lower: return ("1.25T", 180, 0.0)
 
+        # 2. Size Calc
         msu = self.calculate_msu(demand.quantity, variant.weight_per_container)
         target_size = "12T"
         if msu > 0 and msu < config.MSU_THRESHOLD_6T: target_size = "6T"
 
+        # 3. Conditioner (Forces 6T)
         for kw in config.RULE_CONDITIONER:
-            if kw in desc_lower: return ("6T MMT", self._get_bct(sku, "6T MMT"), msu)
+            if kw in desc_lower: return ("6T", self._get_bct(sku, "6T"), msu)
 
-        for kw in config.RULE_HC_BASE:
-            if kw in desc_lower:
-                tgt = f"{target_size} MMT"
-                return (tgt, self._get_bct(sku, tgt), msu)
-
-        tech_type = sku.tech_class if sku else "Single"
-        target_tech = "MMT" if tech_type.lower() == "dual" else "FMT"
-        tgt = f"{target_size} {target_tech}"
-        return (tgt, self._get_bct(sku, tgt), msu)
+        # 4. HC Base & Shampoo (Uses calculated size)
+        # We stripped the FMT/MMT suffix, so we just ask for "12T" or "6T"
+        return (target_size, self._get_bct(sku, target_size), msu)
 
     def _get_bct(self, sku: SKUMeta, target_system: str) -> float:
         if not sku: return config.DEFAULT_DURATION
+        # Exact Match (e.g. "12T" in "12T")
         if target_system in sku.bct_by_system: return sku.bct_by_system[target_system]
-        size = target_system.split()[0]
-        for sys_name, duration in sku.bct_by_system.items():
-            if size in sys_name: return duration
+
         return config.DEFAULT_DURATION
 
 
@@ -83,42 +75,32 @@ class Scheduler:
     def _get_buffer_time(self, description: str) -> int:
         desc_lower = description.lower()
         for kw in config.RULE_CONDITIONER:
-            if kw in desc_lower:
-                return config.BUFFER_COND
+            if kw in desc_lower: return config.BUFFER_COND
         return config.BUFFER_STD
 
     def _apply_shift_constraints(self, dt: datetime) -> datetime:
-        """Snaps time to safe slot if it falls inside a Blackout Window."""
         t = dt.time()
         for rule in config.SHIFT_CONSTRAINTS:
-            # Construct time objects for comparison
             r_start = time(rule['start'][0], rule['start'][1])
             r_end = time(rule['end'][0], rule['end'][1])
-            r_snap = rule['snap']  # (H, M)
-
-            # Check range (handling simple intra-day ranges)
+            r_snap = rule['snap']
             if r_start <= t <= r_end:
-                # Snap BACK to the earlier time
                 return dt.replace(hour=r_snap[0], minute=r_snap[1], second=0, microsecond=0)
         return dt
 
     def _get_shift(self, dt: datetime) -> str:
         t = dt.time()
-        # Shift A: 07:30 to 15:30
         if t >= time(7, 30) and t < time(15, 30): return "A"
-        # Shift B: 15:30 to 23:30
         if t >= time(15, 30) and t < time(23, 30): return "B"
-        # Shift C: 23:30 to 07:30 (Crossing Midnight)
         return "C"
 
-    def run(self, demands: List[Demand]) -> List[ProductionBatch]:
-        print(f"--- Processing {len(demands)} Demands ---")
+    def run_initial_schedule(self, demands: List[Demand]) -> List[ProductionBatch]:
+        print(f"--- Calculating Initial Schedule ({len(demands)} demands) ---")
         batch_id_counter = 1
 
         for d in demands:
             variant = self.enricher.find_variant_for_demand(d)
             gcas = variant.gcas if variant else "UNKNOWN"
-
             system = "System TBD"
             bct = config.DEFAULT_DURATION
             msu = 0.0
@@ -130,29 +112,14 @@ class Scheduler:
                 sku = self.enricher.master_data.get(gcas)
                 system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK"))
 
-            # --- TIMELINE CALCULATION (Updated with Constraints) ---
             min_buffer = self._get_buffer_time(d.description)
-
-            # 1. Theoretical End of Making (latest possible)
-            # Pkg Start - Min Buffer
             raw_mkg_end = d.pkg_start_dt - timedelta(minutes=min_buffer)
-
-            # 2. Theoretical Start of Making
-            # End - BCT
             raw_mkg_start = raw_mkg_end - timedelta(minutes=int(bct))
-
-            # 3. Apply Shift Constraints (Snap Back if needed)
             final_mkg_start = self._apply_shift_constraints(raw_mkg_start)
-
-            # 4. Recalculate End and Buffer based on Final Start
-            # (We keep duration fixed, so End moves earlier too)
             final_mkg_end = final_mkg_start + timedelta(minutes=int(bct))
-
-            # Buffer increases if we snapped back
             actual_buffer = int((d.pkg_start_dt - final_mkg_end).total_seconds() / 60)
 
             shift = self._get_shift(final_mkg_start)
-
             tech_type = "Single"
             sku_obj = self.enricher.master_data.get(gcas)
             if sku_obj: tech_type = sku_obj.tech_class
@@ -179,3 +146,86 @@ class Scheduler:
             batch_id_counter += 1
 
         return self.batches
+
+
+class TankScheduler:
+    def __init__(self, washout_matrices: Dict[str, Dict]):
+        self.washout_matrices = washout_matrices
+
+    def _get_washout(self, prev_batch: ProductionBatch, next_batch: ProductionBatch) -> int:
+        """
+        Determines washout duration between two batches.
+        Prev/Next refers to schedule order (Target/Source in matrix).
+        """
+
+        # --- FIX 1: STRICT SAME-PRODUCT OVERRIDE ---
+        # If GCAS codes match, FORCE 0 washout, ignoring matrix.
+        if str(prev_batch.sku_code).strip() == str(next_batch.sku_code).strip():
+            return 0
+
+        # Matrix Lookup
+        matrix_key = "FMT"
+        if "6T" in next_batch.system: matrix_key = "MMT_6T"
+
+        rules = self.washout_matrices.get(matrix_key, {})
+        key = (str(next_batch.sku_code).strip(), str(prev_batch.sku_code).strip())
+
+        if key in rules:
+            return rules[key]
+
+        # Default Washout if different and not in matrix
+        return config.WASHOUT_DURATION
+
+    def optimize(self, batches: List[ProductionBatch]) -> Tuple[List[ProductionBatch], List[dict]]:
+        print("--- Optimizing Tank Queue (Condensed) ---")
+
+        tanks = {"Tank_12T": [], "Tank_6T": [], "Tank_1.25T": [], "Other": []}
+        for b in batches:
+            if "12T" in b.system:
+                tanks["Tank_12T"].append(b)
+            elif "6T" in b.system:
+                tanks["Tank_6T"].append(b)
+            elif "1.25T" in b.system:
+                tanks["Tank_1.25T"].append(b)
+            else:
+                tanks["Other"].append(b)
+
+        final_batches = []
+        washouts = []
+
+        for tank_name, tank_batches in tanks.items():
+            if not tank_batches: continue
+            tank_batches.sort(key=lambda x: x.mkg_start_dt, reverse=True)
+
+            scheduled = []
+            last_scheduled_batch = None
+
+            for b in tank_batches:
+                if last_scheduled_batch is None:
+                    scheduled.append(b)
+                    last_scheduled_batch = b
+                else:
+                    gap_needed = self._get_washout(last_scheduled_batch, b)
+                    latest_end = last_scheduled_batch.mkg_start_dt - timedelta(minutes=gap_needed)
+
+                    if b.mkg_end_dt > latest_end:
+                        new_end = latest_end
+                        new_start = new_end - timedelta(minutes=b.bct)
+                        b.mkg_end_dt = new_end
+                        b.mkg_start_dt = new_start
+                        b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
+
+                    if gap_needed > 0:
+                        # --- FIX 2: CORRECT VISUAL DURATION ---
+                        # Washout happens immediately after the earlier batch
+                        washouts.append({
+                            "System": b.system,
+                            "Start": b.mkg_end_dt,
+                            "End": b.mkg_end_dt + timedelta(minutes=gap_needed),  # End = Start + 20 mins
+                            "Desc": "WASHOUT"
+                        })
+                    scheduled.append(b)
+                    last_scheduled_batch = b
+            final_batches.extend(scheduled)
+
+        return final_batches, washouts
