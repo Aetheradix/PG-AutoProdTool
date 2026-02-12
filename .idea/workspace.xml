@@ -5,10 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8e094196-47f9-4b6f-aa09-e2267cdcd33b" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/APPT/src/api/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/api/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/src/api/routes/recent_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/api/routes/recent_data.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/src/api/routes/status.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/api/routes/status.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/src/db_connect.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

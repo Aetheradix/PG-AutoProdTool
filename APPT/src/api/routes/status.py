@@ -76,7 +76,7 @@ async def get_rm_data():
     Returns RM data from the database.
     """
     try:
-        engine = get_db_engine()
+        engine = get_engine()
         query = text("SELECT * FROM rm_status_data") 
 
         df = pd.read_sql(query, engine)
