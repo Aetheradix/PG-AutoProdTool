@@ -1,19 +1,18 @@
 import sys
 import os
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 import pandas as pd
 from datetime import datetime, timedelta, time
+
+# Setup Path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+if project_root not in sys.path: sys.path.insert(0, project_root)
+
 from src import config
 from src.data_loader import DataLoader
 from src.logic import PlanEnricher, Scheduler, TankScheduler
 
-from db_connect import get_db_engine  # Import the function we just wrote
-# Path fix
+
 def get_shift_for_timestamp(dt: datetime) -> str:
     t = dt.time()
     if t >= time(7, 30) and t < time(15, 30): return "A"
@@ -22,7 +21,6 @@ def get_shift_for_timestamp(dt: datetime) -> str:
 
 
 def generate_timeline_data(batches, washouts):
-    # 30 min intervals
     if not batches: return pd.DataFrame()
 
     min_time = min(b.mkg_start_dt for b in batches)
@@ -34,7 +32,6 @@ def generate_timeline_data(batches, washouts):
         if min_wash < min_time: min_time = min_wash
         if max_wash > max_time: max_time = max_wash
 
-    # Round down to nearest 30
     min_time = min_time.replace(minute=0, second=0, microsecond=0)
     max_time = max_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
 
@@ -45,15 +42,11 @@ def generate_timeline_data(batches, washouts):
             "Time": curr.strftime("%Y-%m-%d %H:%M"),
             "Shift": get_shift_for_timestamp(curr)
         }
-
-        # Condensed Columns
         for col in ["12T", "6T", "1.25T"]:
             row[col] = ""
 
-        # Batches
         for b in batches:
             if b.mkg_start_dt <= curr < b.mkg_end_dt:
-                # Map system string to simplified column
                 col = None
                 if "12T" in b.system:
                     col = "12T"
@@ -61,10 +54,8 @@ def generate_timeline_data(batches, washouts):
                     col = "6T"
                 elif "1.25T" in b.system:
                     col = "1.25T"
-
                 if col: row[col] = f"{b.id}: {b.desc}"
 
-        # Washouts
         for w in washouts:
             if w["Start"] <= curr < w["End"]:
                 sys_str = w["System"]
@@ -75,27 +66,17 @@ def generate_timeline_data(batches, washouts):
                     col = "6T"
                 elif "1.25T" in sys_str:
                     col = "1.25T"
-
                 if col: row[col] = "WASHOUT"
 
         timeline.append(row)
-        # UPDATED: 30 minutes
         curr += timedelta(minutes=30)
 
     return pd.DataFrame(timeline)
 
-def main():
-    print("====================================================")
-    print("   AUTO PRODUCTION PLANNER - PHASE 6 Tank Optimizer ")
-    print("====================================================")
-    # 1. Get the connection ==========================================SQL DB (Replace later when SQL access Provided)
-    engine = get_db_engine()
-    print("Database connected successfully.")
 
-    # 2. Run your logic (Example: Read data)
-    #query = "SELECT * FROM rm_data LIMIT 20;"
-    #df = pd.read_sql(query, engine)
-    # =================================================================SQL DB (Replace later when SQL access Provided)
+def main():
+    print("=== AUTO PRODUCTION PLANNER (PHASE 9 - CLEAN DB) ===")
+
     master_path = os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE)
     packing_path = os.path.join(config.INPUT_DIR, config.PACKING_PLAN_FILE)
 

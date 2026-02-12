@@ -1,8 +1,8 @@
 import pandas as pd
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List
 from datetime import datetime
-from src import config
+from src import config, db
 from src.models import SKUMeta, Demand, VariantInfo
 
 
@@ -16,119 +16,114 @@ class DataLoader:
         if s.lower() == 'nan': return ""
         return s
 
-    def load_washout_matrices(self) -> Dict[str, Dict[Tuple[str, str], int]]:
-        """
-        Loads all washout CSVs into a dict of dicts:
-        {
-            'FMT': { ('SrcGCAS', 'TgtGCAS'): 20, ... },
-            'MMT_6T': ...
-        }
-        """
+    def load_washout_matrices(self) -> Dict[str, Dict]:
+        # (Same as before - reading from SQL)
+        print("Loading Washout Matrices from SQL...")
         matrices = {}
-        files = {
-            'FMT': config.WO_FILE_FMT,
-            'MMT_6T': config.WO_FILE_MMT_6T,
-            'MMT_12T': config.WO_FILE_MMT_12T
-        }
+        sources = {'FMT': 'fmt_wo_matrix', 'MMT_6T': 'mmt_6t_matrix', 'MMT_12T': 'mmt_12t_matrix'}
 
-        for key, filename in files.items():
-            path = os.path.join(config.INPUT_DIR, filename)
-            if not os.path.exists(path):
-                print(f"[WARN] Washout file not found: {filename}")
+        for key, table_name in sources.items():
+            df = db.fetch_table(table_name)
+            if df.empty:
                 matrices[key] = {}
                 continue
 
-            try:
-                df = pd.read_csv(path)
-                # Expected: Source_GCAS, Target_GCAS, Washout_Type (WASH/X)
-                mat_dict = {}
-                for _, row in df.iterrows():
-                    src = self._clean_gcas(row.get('Source_GCAS'))
-                    tgt = self._clean_gcas(row.get('Target_GCAS'))
-                    w_type = str(row.get('Washout_Type', '')).upper()
-
-                    duration = 0
-                    if "WASH" in w_type:
-                        duration = config.WASHOUT_DURATION
-
-                    if src and tgt:
-                        mat_dict[(src, tgt)] = duration
-                matrices[key] = mat_dict
-                print(f"Loaded {len(mat_dict)} washout rules for {key}.")
-            except Exception as e:
-                print(f"[ERROR] Reading {filename}: {e}")
-                matrices[key] = {}
-
+            mat_dict = {}
+            df.columns = [c.lower() for c in df.columns]
+            for _, row in df.iterrows():
+                src = self._clean_gcas(row.get('source_gcas'))
+                tgt = self._clean_gcas(row.get('target_gcas'))
+                w_type = str(row.get('washout_type', '')).upper()
+                duration = config.WASHOUT_DURATION if "WASH" in w_type else 0
+                if src and tgt: mat_dict[(src, tgt)] = duration
+            matrices[key] = mat_dict
         return matrices
 
     def load_bulk_variant_map(self) -> Dict[str, VariantInfo]:
-        # (Same as before)
-        print(f"Loading Bulk Variant Map...")
-        try:
-            df = pd.read_excel(self.master_path, sheet_name=config.SHEET_BULK_VARIANT,
-                               header=config.BULK_VARIANT_HEADER_ROW)
-        except Exception as e:
+        """
+        Loads Bulk Variant Map from SQL table `bulk_details`.
+        """
+        print(f"Loading Bulk Variant Map from SQL (bulk_details)...")
+        df = db.fetch_table("bulk_details")
+
+        if df.empty:
+            print("[WARN] bulk_details table is empty! Run src/migrate_to_sql.py first.")
             return {}
 
         variant_map = {}
-        df.columns = df.columns.astype(str).str.strip()
-        col_desc = next((c for c in df.columns if config.COL_VAR_DESC in c), config.COL_VAR_DESC)
-        col_gcas = next((c for c in df.columns if config.COL_VAR_GCAS in c), config.COL_VAR_GCAS)
-        col_weight = next((c for c in df.columns if config.COL_VAR_WEIGHT in c), None)
-
+        # Columns in SQL: description, bulk_gcas, weight_per_container_kg
         for _, row in df.iterrows():
-            desc = str(row.get(col_desc, "")).strip()
-            gcas = self._clean_gcas(row.get(col_gcas, ""))
-            weight = 0.0
-            if col_weight:
-                try:
-                    w_val = row.get(col_weight, 0); weight = float(w_val) if pd.notna(w_val) else 0.0
-                except:
-                    weight = 0.0
+            desc = str(row.get('description', '')).strip()
+            gcas = self._clean_gcas(row.get('bulk_gcas', ''))
+            weight = float(row.get('weight_per_container_kg', 0.0))
 
             if desc and gcas:
                 variant_map[desc] = VariantInfo(gcas=gcas, weight_per_container=weight)
+
+        print(f"Loaded {len(variant_map)} variants from SQL.")
         return variant_map
 
     def load_master_data(self) -> Dict[str, SKUMeta]:
-        # (Same as before)
-        try:
-            df = pd.read_excel(self.master_path, sheet_name=config.SHEET_MASTER_DATA, header=config.MASTER_HEADER_ROW)
-        except Exception as e:
-            raise IOError(f"Failed to read Master Excel: {e}")
+        """
+        Loads SKU Master Data from SQL table `sku_master`.
+        """
+        print(f"Loading Master BCT Data from SQL (sku_master)...")
+        df = db.fetch_table("sku_master")
+
+        if df.empty:
+            print("[WARN] sku_master table is empty! Run src/migrate_to_sql.py first.")
+            return {}
 
         sku_map = {}
-        col_single_dual_idx = config.COL_IDX_SINGLE_DUAL
-        for idx, col_name in enumerate(df.columns):
-            if "Single" in str(col_name) and "Dual" in str(col_name):
-                col_single_dual_idx = idx;
-                break
-
-        for i, row in df.iterrows():
-            gcas = self._clean_gcas(row.iloc[config.COL_IDX_GCAS])
+        for _, row in df.iterrows():
+            gcas = self._clean_gcas(row.get('gcas'))
             if not gcas: continue
-            desc = str(row.iloc[config.COL_IDX_DESC]).strip()
-            tech = str(row.iloc[config.COL_IDX_TECH]).strip()
-            tech_class = "Single"
-            try:
-                val = str(row.iloc[col_single_dual_idx]).strip()
-                if "dual" in val.lower(): tech_class = "Dual"
-            except:
-                pass
+
+            desc = str(row.get('description', '')).strip()
+            tech = str(row.get('technology', '')).strip()
+            tech_class = str(row.get('tech_class', 'Single')).strip()
+
+            # Reconstruct the bct_by_system dictionary expected by Logic
+            # Note: Logic expects specific keys like "12T FMT", "12T" etc.
+            # Since we simplified config to just "12T" and "6T", we map these columns:
 
             bct_map = {}
-            for col_idx, sys_name in config.SYSTEM_COL_MAP.items():
-                try:
-                    val = row.iloc[col_idx]
-                    if pd.notna(val) and str(val).replace('.', '').isdigit():
-                        bct_map[sys_name] = float(val)
-                except:
-                    pass
-            sku_map[gcas] = SKUMeta(gcas=gcas, description=desc, technology=tech, tech_class=tech_class,
-                                    bct_by_system=bct_map)
+            # "12T" could come from FMT or MMT column. We take the max or first available.
+            # Or simpler: map all 4, let logic pick best.
+
+            # Since we merged FMT/MMT in config.SYSTEM_COL_MAP to just "12T",
+            # we need to be careful. The Logic looks for "12T".
+            # Let's populate "12T" with whichever value exists (FMT or MMT).
+
+            val_12t_fmt = float(row.get('bct_12t_fmt') or 0)
+            val_12t_mmt = float(row.get('bct_12t_mmt') or 0)
+            val_6t_fmt = float(row.get('bct_6t_fmt') or 0)
+            val_6t_mmt = float(row.get('bct_6t_mmt') or 0)
+
+            # If logic asks for "12T", give it the valid one.
+            # If both exist, maybe take MMT if tech_class is Dual?
+            # For now, let's just populate the specific keys if logic ever expands,
+            # AND the generic keys "12T"/"6T"
+
+            if val_12t_fmt > 0: bct_map["12T"] = val_12t_fmt
+            if val_12t_mmt > 0: bct_map["12T"] = val_12t_mmt  # Overwrite/Fallback
+
+            if val_6t_fmt > 0: bct_map["6T"] = val_6t_fmt
+            if val_6t_mmt > 0: bct_map["6T"] = val_6t_mmt
+
+            sku_map[gcas] = SKUMeta(
+                gcas=gcas,
+                description=desc,
+                technology=tech,
+                tech_class=tech_class,
+                bct_by_system=bct_map
+            )
+
+        print(f"Loaded {len(sku_map)} Master SKUs from SQL.")
         return sku_map
 
     def _parse_dt(self, row, col_date, col_time):
+        # (Same helper)
         d_val = row.get(col_date)
         t_val = row.get(col_time)
         try:
@@ -148,8 +143,8 @@ class DataLoader:
             return None
 
     def load_packing_plan(self) -> List[Demand]:
-        # (Same as before)
-        print(f"Loading Packing Plan...")
+        # Remains Excel (User Input)
+        print(f"Loading Packing Plan from Excel...")
         try:
             df = pd.read_excel(self.packing_path, header=0)
         except Exception as e:

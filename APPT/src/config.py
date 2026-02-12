@@ -25,7 +25,7 @@ DB_NAME = os.getenv("DB_NAME")
 
 # --- FILE NAMES ---
 MASTER_DATA_FILE = "Master Data - Test.xlsx"
-PACKING_PLAN_FILE = "packing_plan_14th Jan.xlsx"
+PACKING_PLAN_FILE = "packing_plan_7th Jan.xlsx"
 
 # Washout Matrices
 WO_FILE_FMT = "FMT_WO_flat.csv"
