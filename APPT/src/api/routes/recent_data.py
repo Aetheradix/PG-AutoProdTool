@@ -7,7 +7,7 @@ import pandas as pd
 from sqlalchemy import text
 
 
-from src.db_connect import get_db_engine
+from src.db import get_engine
 
 router = APIRouter()
 

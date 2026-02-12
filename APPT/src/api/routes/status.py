@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Query, HTTPException
-from src.db_connect import get_db_engine
+from src.db import get_engine
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
@@ -18,7 +18,7 @@ async def get_status(
     Returns TTS data with colour & status mapping for frontend, dynamically detecting date columns.
     """
     try:
-        engine = get_db_engine()
+        engine = get_engine()
 
         col_query = text(
             "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'tts_raw_data'"

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
-from src.db_connect import get_db_engine
+from src.db import get_engine
 from src.api.routes import status, recent_data, excel
 
 app = FastAPI(
