@@ -5,9 +5,10 @@ from fastapi import APIRouter, Query, HTTPException
 from typing import Optional, List, Dict, Any
 import pandas as pd
 from sqlalchemy import text
-
-
 from src.db import get_engine
+
+
+
 
 router = APIRouter()
 
@@ -21,7 +22,7 @@ async def get_recent_data(
    
     """
     try:
-        engine = get_db_engine()
+        engine = get_engine()
         query = text("select * from tts_raw_data limit :limit")
         df = pd.read_sql(query, engine, params={"limit": limit})
         
