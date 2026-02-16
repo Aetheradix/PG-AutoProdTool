@@ -34,7 +34,7 @@ def create_tables(conn):
 
     # 2. SKU Master Table
     print("Creating table: sku_master...")
-    cursor.execute("DROP TABLE IF EXISTS sku_master")
+    #cursor.execute("DROP TABLE IF EXISTS sku_master")
 
     cursor.execute("""
         CREATE TABLE sku_master (

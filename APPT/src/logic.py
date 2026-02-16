@@ -46,24 +46,20 @@ class PlanEnricher:
         for kw in config.RULE_CLIMBAZOLE:
             if kw in desc_lower: return ("1.25T", 180, 0.0)
 
-        # 2. Size Calc
         msu = self.calculate_msu(demand.quantity, variant.weight_per_container)
         target_size = "12T"
         if msu > 0 and msu < config.MSU_THRESHOLD_6T: target_size = "6T"
 
-        # 3. Conditioner (Forces 6T)
+        # 3. Conditioner
         for kw in config.RULE_CONDITIONER:
-            if kw in desc_lower: return ("6T", self._get_bct(sku, "6T"), msu)
+            if kw in desc_lower:
+                return ("6T", self._get_bct(sku, "6T"), msu)
 
-        # 4. HC Base & Shampoo (Uses calculated size)
-        # We stripped the FMT/MMT suffix, so we just ask for "12T" or "6T"
         return (target_size, self._get_bct(sku, target_size), msu)
 
     def _get_bct(self, sku: SKUMeta, target_system: str) -> float:
         if not sku: return config.DEFAULT_DURATION
-        # Exact Match (e.g. "12T" in "12T")
         if target_system in sku.bct_by_system: return sku.bct_by_system[target_system]
-
         return config.DEFAULT_DURATION
 
 
@@ -152,32 +148,26 @@ class TankScheduler:
     def __init__(self, washout_matrices: Dict[str, Dict]):
         self.washout_matrices = washout_matrices
 
-    def _get_washout(self, prev_batch: ProductionBatch, next_batch: ProductionBatch) -> int:
-        """
-        Determines washout duration between two batches.
-        Prev/Next refers to schedule order (Target/Source in matrix).
-        """
+    def _is_conditioner(self, batch: ProductionBatch) -> bool:
+        desc_lower = str(batch.desc).lower()
+        for kw in config.RULE_CONDITIONER:
+            if kw in desc_lower: return True
+        return False
 
-        # --- FIX 1: STRICT SAME-PRODUCT OVERRIDE ---
-        # If GCAS codes match, FORCE 0 washout, ignoring matrix.
-        if str(prev_batch.sku_code).strip() == str(next_batch.sku_code).strip():
-            return 0
+    def _get_matrix_washout(self, prev_batch: ProductionBatch, next_batch: ProductionBatch) -> int:
+        if str(prev_batch.sku_code).strip() == str(next_batch.sku_code).strip(): return 0
 
-        # Matrix Lookup
         matrix_key = "FMT"
         if "6T" in next_batch.system: matrix_key = "MMT_6T"
 
         rules = self.washout_matrices.get(matrix_key, {})
         key = (str(next_batch.sku_code).strip(), str(prev_batch.sku_code).strip())
 
-        if key in rules:
-            return rules[key]
-
-        # Default Washout if different and not in matrix
+        if key in rules: return rules[key]
         return config.WASHOUT_DURATION
 
     def optimize(self, batches: List[ProductionBatch]) -> Tuple[List[ProductionBatch], List[dict]]:
-        print("--- Optimizing Tank Queue (Condensed) ---")
+        print("--- Optimizing Tank Queue (Hidden Cooldown) ---")
 
         tanks = {"Tank_12T": [], "Tank_6T": [], "Tank_1.25T": [], "Other": []}
         for b in batches:
@@ -205,8 +195,33 @@ class TankScheduler:
                     scheduled.append(b)
                     last_scheduled_batch = b
                 else:
-                    gap_needed = self._get_washout(last_scheduled_batch, b)
-                    latest_end = last_scheduled_batch.mkg_start_dt - timedelta(minutes=gap_needed)
+                    # 'b' is EARLIER, 'last' is LATER
+
+                    is_b_cond = self._is_conditioner(b)
+                    is_last_cond = self._is_conditioner(last_scheduled_batch)
+
+                    # 1. Determine Washout Duration (Standard or Cond Post-Wash)
+                    wash_dur = 0
+                    wash_type = None
+
+                    if is_b_cond:
+                        wash_dur = config.COND_POST_WASH
+                        wash_type = "COND_WASH"
+                    else:
+                        wash_dur = self._get_matrix_washout(last_scheduled_batch, b)
+                        if wash_dur > 0: wash_type = "STD_WASH"
+
+                    # 2. Determine Required Gap (Wash + Cooldown)
+                    # Gap starts from b.End
+                    required_gap_after_b = wash_dur
+
+                    if is_last_cond:
+                        # If next batch is Cond, we need 30m idle time AFTER any washout
+                        required_gap_after_b += config.COND_COOLDOWN
+
+                    # 3. Calculate 'b' Latest End Time
+                    # b.End must be <= last.Start - required_gap
+                    latest_end = last_scheduled_batch.mkg_start_dt - timedelta(minutes=required_gap_after_b)
 
                     if b.mkg_end_dt > latest_end:
                         new_end = latest_end
@@ -215,15 +230,16 @@ class TankScheduler:
                         b.mkg_start_dt = new_start
                         b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
 
-                    if gap_needed > 0:
-                        # --- FIX 2: CORRECT VISUAL DURATION ---
-                        # Washout happens immediately after the earlier batch
+                    # 4. Generate Visuals (ONLY Washouts, No Cooldown Blocks)
+                    if wash_type:
+                        desc = "COND WASH (60m)" if wash_type == "COND_WASH" else "WASHOUT"
                         washouts.append({
                             "System": b.system,
                             "Start": b.mkg_end_dt,
-                            "End": b.mkg_end_dt + timedelta(minutes=gap_needed),  # End = Start + 20 mins
-                            "Desc": "WASHOUT"
+                            "End": b.mkg_end_dt + timedelta(minutes=wash_dur),
+                            "Desc": desc
                         })
+
                     scheduled.append(b)
                     last_scheduled_batch = b
             final_batches.extend(scheduled)

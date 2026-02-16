@@ -11,6 +11,8 @@ if project_root not in sys.path: sys.path.insert(0, project_root)
 from src import config
 from src.data_loader import DataLoader
 from src.logic import PlanEnricher, Scheduler, TankScheduler
+from src.plan_exporter import upload_to_sql
+from src.update_rm_status import update_tank_status  # <--- NEW IMPORT
 
 
 def get_shift_for_timestamp(dt: datetime) -> str:
@@ -66,7 +68,7 @@ def generate_timeline_data(batches, washouts):
                     col = "6T"
                 elif "1.25T" in sys_str:
                     col = "1.25T"
-                if col: row[col] = "WASHOUT"
+                if col: row[col] = w['Desc']  # Use actual desc (WASHOUT/COND WASH)
 
         timeline.append(row)
         curr += timedelta(minutes=30)
@@ -75,16 +77,25 @@ def generate_timeline_data(batches, washouts):
 
 
 def main():
-    print("=== AUTO PRODUCTION PLANNER (PHASE 9 - CLEAN DB) ===")
+    print("=== AUTO PRODUCTION PLANNER (FINAL INTEGRATION) ===")
 
+    # 1. Update RM Status (Live Sensor Sync)
+    # This ensures we are planning against the very latest tank levels
+    try:
+        update_tank_status()
+    except Exception as e:
+        print(f"[WARN] Failed to update RM Status: {e}")
+
+    # Paths (Fallback/Init)
     master_path = os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE)
     packing_path = os.path.join(config.INPUT_DIR, config.PACKING_PLAN_FILE)
 
+    # 2. Load Data (From SQL)
     loader = DataLoader(master_path, packing_path)
     try:
         master_data = loader.load_master_data()
         bulk_map = loader.load_bulk_variant_map()
-        demands = loader.load_packing_plan()
+        demands = loader.load_packing_plan()  # Loads from SQL 'packing_po'
         wo_matrices = loader.load_washout_matrices()
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
@@ -92,6 +103,7 @@ def main():
         traceback.print_exc()
         return
 
+    # 3. Logic & Optimization
     enricher = PlanEnricher(master_data, bulk_map)
     scheduler = Scheduler(enricher)
     tank_opt = TankScheduler(wo_matrices)
@@ -100,8 +112,9 @@ def main():
     final_batches, washouts = tank_opt.optimize(raw_batches)
 
     print(f"\nGenerated {len(final_batches)} Batches.")
-    print(f"Inserted {len(washouts)} Washouts.")
+    print(f"Generated {len(washouts)} Washout/Cooldown Events.")
 
+    # 4. Generate Outputs
     if final_batches:
         data = []
         final_batches.sort(key=lambda x: x.id)
@@ -126,6 +139,7 @@ def main():
                 "Pkg End Time": b.pkg_end_dt
             })
 
+        # Excel Export
         df_main = pd.DataFrame(data)
         df_main = df_main[config.OUTPUT_COLUMNS]
         df_time = generate_timeline_data(final_batches, washouts)
@@ -140,7 +154,10 @@ def main():
                 sheet.set_column(0, 15, 20)
             writer.sheets["Tank Timeline"].set_column(2, 5, 45)
 
-        print(f"Saved plan to: {out_path}")
+        print(f"Saved Excel plan to: {out_path}")
+
+        # SQL Export
+        upload_to_sql(final_batches, washouts)
 
 
 if __name__ == "__main__":
