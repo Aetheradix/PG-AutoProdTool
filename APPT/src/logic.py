@@ -1,6 +1,7 @@
 import re
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta, time
+import pandas as pd
 from src import config
 from src.models import SKUMeta, Demand, ProductionBatch, VariantInfo
 
@@ -106,7 +107,8 @@ class Scheduler:
                 bct = 180
             else:
                 sku = self.enricher.master_data.get(gcas)
-                system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK"))
+                # FIXED LINE BELOW: Added 0.0 as the second argument
+                system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK", 0.0))
 
             min_buffer = self._get_buffer_time(d.description)
             raw_mkg_end = d.pkg_start_dt - timedelta(minutes=min_buffer)
@@ -195,12 +197,9 @@ class TankScheduler:
                     scheduled.append(b)
                     last_scheduled_batch = b
                 else:
-                    # 'b' is EARLIER, 'last' is LATER
-
                     is_b_cond = self._is_conditioner(b)
                     is_last_cond = self._is_conditioner(last_scheduled_batch)
 
-                    # 1. Determine Washout Duration (Standard or Cond Post-Wash)
                     wash_dur = 0
                     wash_type = None
 
@@ -211,16 +210,10 @@ class TankScheduler:
                         wash_dur = self._get_matrix_washout(last_scheduled_batch, b)
                         if wash_dur > 0: wash_type = "STD_WASH"
 
-                    # 2. Determine Required Gap (Wash + Cooldown)
-                    # Gap starts from b.End
                     required_gap_after_b = wash_dur
-
                     if is_last_cond:
-                        # If next batch is Cond, we need 30m idle time AFTER any washout
                         required_gap_after_b += config.COND_COOLDOWN
 
-                    # 3. Calculate 'b' Latest End Time
-                    # b.End must be <= last.Start - required_gap
                     latest_end = last_scheduled_batch.mkg_start_dt - timedelta(minutes=required_gap_after_b)
 
                     if b.mkg_end_dt > latest_end:
@@ -230,7 +223,6 @@ class TankScheduler:
                         b.mkg_start_dt = new_start
                         b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
 
-                    # 4. Generate Visuals (ONLY Washouts, No Cooldown Blocks)
                     if wash_type:
                         desc = "COND WASH (60m)" if wash_type == "COND_WASH" else "WASHOUT"
                         washouts.append({
@@ -245,3 +237,66 @@ class TankScheduler:
             final_batches.extend(scheduled)
 
         return final_batches, washouts
+
+
+class StorageAssigner:
+    def __init__(self, tank_snapshot: pd.DataFrame):
+        self.tanks = {}
+        if not tank_snapshot.empty:
+            for _, row in tank_snapshot.iterrows():
+                tid = row['tank_id']
+                is_usable = False
+
+                code = int(row['color_code']) if pd.notna(row['color_code']) else 0
+                gcas = str(row['current_gcas']).strip()
+
+                if code in [1, 7, 14]:
+                    is_usable = True
+
+                self.tanks[tid] = {
+                    "available_at": datetime.min,
+                    "status_code": code,
+                    "current_gcas": gcas,
+                    "is_usable": is_usable
+                }
+
+    def assign_tanks(self, batches: List[ProductionBatch]):
+        print("--- Assigning Storage Tanks ---")
+        batches.sort(key=lambda x: x.mkg_end_dt)
+
+        for b in batches:
+            needed_start = b.mkg_end_dt
+            needed_end = b.pkg_end_dt
+            gcas = str(b.sku_code).strip()
+
+            candidates = []
+
+            for tid, state in self.tanks.items():
+                if not state["is_usable"]: continue
+                if state["available_at"] > needed_start: continue
+
+                score = -1
+
+                if state["status_code"] == 7 and state["current_gcas"] == gcas:
+                    score = 1
+                elif state["status_code"] == 1:
+                    score = 2
+                elif state["status_code"] == 14:
+                    score = 3
+                elif state["status_code"] == 7:
+                    score = 4
+
+                if score > 0:
+                    candidates.append((score, tid))
+
+            candidates.sort(key=lambda x: x[0])
+
+            if candidates:
+                best_tank = candidates[0][1]
+                b.storage_tank = best_tank
+
+                self.tanks[best_tank]["available_at"] = needed_end
+                self.tanks[best_tank]["current_gcas"] = gcas
+                self.tanks[best_tank]["status_code"] = 7
+            else:
+                b.storage_tank = "NO_TANK"

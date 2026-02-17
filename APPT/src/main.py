@@ -10,9 +10,10 @@ if project_root not in sys.path: sys.path.insert(0, project_root)
 
 from src import config
 from src.data_loader import DataLoader
-from src.logic import PlanEnricher, Scheduler, TankScheduler
+from src.logic import PlanEnricher, Scheduler, TankScheduler, StorageAssigner
 from src.plan_exporter import upload_to_sql
-from src.update_rm_status import update_tank_status  # <--- NEW IMPORT
+from src.update_rm_status import update_tank_status
+from src.storage_manager import get_storage_tank_snapshot  # New Import
 
 
 def get_shift_for_timestamp(dt: datetime) -> str:
@@ -60,15 +61,14 @@ def generate_timeline_data(batches, washouts):
 
         for w in washouts:
             if w["Start"] <= curr < w["End"]:
-                sys_str = w["System"]
                 col = None
-                if "12T" in sys_str:
+                if "12T" in w['System']:
                     col = "12T"
-                elif "6T" in sys_str:
+                elif "6T" in w['System']:
                     col = "6T"
-                elif "1.25T" in sys_str:
+                elif "1.25T" in w['System']:
                     col = "1.25T"
-                if col: row[col] = w['Desc']  # Use actual desc (WASHOUT/COND WASH)
+                if col: row[col] = w['Desc']
 
         timeline.append(row)
         curr += timedelta(minutes=30)
@@ -77,44 +77,47 @@ def generate_timeline_data(batches, washouts):
 
 
 def main():
-    print("=== AUTO PRODUCTION PLANNER (FINAL INTEGRATION) ===")
+    print("=== AUTO PRODUCTION PLANNER (FINAL + STORAGE) ===")
 
-    # 1. Update RM Status (Live Sensor Sync)
-    # This ensures we are planning against the very latest tank levels
+    # 1. Update Sensors
     try:
         update_tank_status()
     except Exception as e:
         print(f"[WARN] Failed to update RM Status: {e}")
 
-    # Paths (Fallback/Init)
+    # 2. Load Data
     master_path = os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE)
     packing_path = os.path.join(config.INPUT_DIR, config.PACKING_PLAN_FILE)
 
-    # 2. Load Data (From SQL)
     loader = DataLoader(master_path, packing_path)
     try:
         master_data = loader.load_master_data()
         bulk_map = loader.load_bulk_variant_map()
-        demands = loader.load_packing_plan()  # Loads from SQL 'packing_po'
+        demands = loader.load_packing_plan()
         wo_matrices = loader.load_washout_matrices()
+        tank_snapshot = get_storage_tank_snapshot()  # Load Storage Snapshot
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
         import traceback
         traceback.print_exc()
         return
 
-    # 3. Logic & Optimization
+    # 3. Logic: Make Schedule -> Optimize Washouts -> Assign Storage
     enricher = PlanEnricher(master_data, bulk_map)
     scheduler = Scheduler(enricher)
     tank_opt = TankScheduler(wo_matrices)
+    storage_assigner = StorageAssigner(tank_snapshot)  # Init Assigner
 
     raw_batches = scheduler.run_initial_schedule(demands)
     final_batches, washouts = tank_opt.optimize(raw_batches)
 
+    # Assign Storage Tanks
+    storage_assigner.assign_tanks(final_batches)
+
     print(f"\nGenerated {len(final_batches)} Batches.")
     print(f"Generated {len(washouts)} Washout/Cooldown Events.")
 
-    # 4. Generate Outputs
+    # 4. Outputs
     if final_batches:
         data = []
         final_batches.sort(key=lambda x: x.id)
@@ -135,11 +138,12 @@ def main():
                 "BCT (min)": b.bct,
                 "Mkg End Time": b.mkg_end_dt,
                 "Buffer (min)": b.buffer_min,
+                "Storage Tank": b.storage_tank,  # <--- Added
                 "Pkg Start Time": b.pkg_start_dt,
                 "Pkg End Time": b.pkg_end_dt
             })
 
-        # Excel Export
+        # Excel
         df_main = pd.DataFrame(data)
         df_main = df_main[config.OUTPUT_COLUMNS]
         df_time = generate_timeline_data(final_batches, washouts)
@@ -156,7 +160,7 @@ def main():
 
         print(f"Saved Excel plan to: {out_path}")
 
-        # SQL Export
+        # SQL
         upload_to_sql(final_batches, washouts)
 
 

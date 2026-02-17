@@ -25,7 +25,7 @@ DB_NAME = os.getenv("DB_NAME")
 
 # --- FILE NAMES ---
 MASTER_DATA_FILE = "Master Data - Test.xlsx"
-PACKING_PLAN_FILE = "packing_plan.xlsx" # Fallback/Legacy
+PACKING_PLAN_FILE = "packing_plan.xlsx"
 
 # --- MASTER DATA CONFIG ---
 SHEET_MASTER_DATA = 0
@@ -65,6 +65,7 @@ OUTPUT_COLUMNS = [
     "Production Line", "Order", "Material", "Description",
     "Batch ID", "GCAS", "System", "Total MSU", "Tech Type",
     "Shift", "Mkg Start Time", "BCT (min)", "Mkg End Time", "Buffer (min)",
+    "Storage Tank",  # <--- NEW COLUMN
     "Pkg Start Time", "Pkg End Time"
 ]
 

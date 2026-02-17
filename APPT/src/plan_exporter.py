@@ -4,9 +4,6 @@ from src import db
 
 
 def upload_to_sql(batches, washouts):
-    """
-    Uploads the generated schedule and timeline events to SQL.
-    """
     print("--- UPLOADING FINAL PLAN TO SQL ---")
 
     conn = db.get_connection()
@@ -36,6 +33,7 @@ def upload_to_sql(batches, washouts):
                 bct_minutes INT,
                 mkg_end_time DATETIME,
                 buffer_minutes INT,
+                storage_tank VARCHAR(50),
                 pkg_start_time DATETIME,
                 pkg_end_time DATETIME
             )
@@ -59,6 +57,7 @@ def upload_to_sql(batches, washouts):
                 b.bct,
                 b.mkg_end_dt,
                 b.buffer_min,
+                b.storage_tank,  # <--- Added
                 b.pkg_start_dt,
                 b.pkg_end_dt
             ))
@@ -68,13 +67,13 @@ def upload_to_sql(batches, washouts):
                 INSERT INTO production_schedule 
                 (batch_id, production_line, order_id, material, description, gcas, system, 
                  total_msu, tech_type, shift, mkg_start_time, bct_minutes, mkg_end_time, 
-                 buffer_minutes, pkg_start_time, pkg_end_time)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 buffer_minutes, storage_tank, pkg_start_time, pkg_end_time)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             cursor.executemany(stmt_batch, batch_data)
             print(f"Inserted {len(batch_data)} batches into 'production_schedule'.")
 
-        # --- 2. Timeline Events Table (Washouts/Cooldowns) ---
+        # --- 2. Timeline Events Table ---
         print("Updating table: timeline_events...")
         cursor.execute("DROP TABLE IF EXISTS timeline_events")
         cursor.execute("""
@@ -88,10 +87,8 @@ def upload_to_sql(batches, washouts):
             )
         """)
 
-        # Prepare Washout Data
         washout_data = []
         for w in washouts:
-            # Determine simplified type for frontend coloring
             evt_type = "WASHOUT"
             if "COOLDOWN" in w['Desc'].upper():
                 evt_type = "COOLDOWN"

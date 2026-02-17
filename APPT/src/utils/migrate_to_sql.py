@@ -1,3 +1,6 @@
+# this is a temp file created for uploading Master Data excel provided by Thoravi, should not be needed for final tool(?)
+# unless we are planning to have master data xls->SQL, which is a redundancy considering front end allows this already.
+
 import sys
 import os
 
