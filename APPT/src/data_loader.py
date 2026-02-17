@@ -17,7 +17,6 @@ class DataLoader:
         return s
 
     def load_washout_matrices(self) -> Dict[str, Dict]:
-        # (Same as before)
         print("Loading Washout Matrices from SQL...")
         matrices = {}
         sources = {'FMT': 'fmt_wo_matrix', 'MMT_6T': 'mmt_6t_matrix', 'MMT_12T': 'mmt_12t_matrix'}
@@ -38,7 +37,6 @@ class DataLoader:
         return matrices
 
     def load_bulk_variant_map(self) -> Dict[str, VariantInfo]:
-        # (Same as before)
         print(f"Loading Bulk Variant Map from SQL (bulk_details)...")
         df = db.fetch_table("bulk_details")
         if df.empty: return {}
@@ -52,11 +50,15 @@ class DataLoader:
         return variant_map
 
     def load_master_data(self) -> Dict[str, SKUMeta]:
-        # (Same as before)
-        print(f"Loading Master BCT Data from SQL (sku_master)...")
+        print(f"Loading Master SKU & Recipe Data from SQL (sku_master)...")
         df = db.fetch_table("sku_master")
         if df.empty: return {}
         sku_map = {}
+
+        # Identify recipe columns dynamically or static list
+        # We look for cols starting with 'cons_'
+        recipe_cols = [c for c in df.columns if str(c).startswith('cons_')]
+
         for _, row in df.iterrows():
             gcas = self._clean_gcas(row.get('gcas'))
             if not gcas: continue
@@ -75,52 +77,49 @@ class DataLoader:
             if val_6t_fmt > 0: bct_map["6T"] = val_6t_fmt
             if val_6t_mmt > 0: bct_map["6T"] = val_6t_mmt
 
-            sku_map[gcas] = SKUMeta(gcas=gcas, description=desc, technology=tech, tech_class=tech_class,
-                                    bct_by_system=bct_map)
+            # Extract Recipe
+            recipes = {}
+            for col in recipe_cols:
+                val = float(row.get(col) or 0)
+                if val > 0:
+                    # Clean key: 'cons_12t_sls' -> '12T_sls'
+                    key = col.replace('cons_', '')
+                    # If col is 'cons_12t_sls', key becomes '12t_sls'
+                    recipes[key.lower()] = val
+
+            sku_map[gcas] = SKUMeta(
+                gcas=gcas,
+                description=desc,
+                technology=tech,
+                tech_class=tech_class,
+                bct_by_system=bct_map,
+                recipes=recipes
+            )
         return sku_map
 
     def load_packing_plan(self) -> List[Demand]:
-        """
-        Loads packing plan from SQL table `packing_po`.
-        Filters out 'INM1' and 'INM2' lines.
-        """
         print(f"Loading Packing Plan from SQL (packing_po)...")
-
-        # 1. Fetch Table using SQL query via Pandas to filter efficiently
-        # Or fetch all and filter in Python
         df = db.fetch_table(config.TABLE_PACKING_PO)
-
         if df.empty:
-            print("[WARN] packing_po table is empty! Run src/upload_packing_po.py first.")
+            print("[WARN] packing_po table is empty!")
             return []
 
         demands = []
-
-        # 2. Filter: Ignore INM1, INM2
-        # Normalize column names just in case
         df.columns = [c.lower() for c in df.columns]
-
-        # Define excluded lines
         excluded_lines = ['INM1', 'INM2']
 
         for _, row in df.iterrows():
             try:
                 line = str(row.get(config.COL_SQL_LINE, "")).strip().upper()
-
-                # SKIP if line is in exclusion list
-                if line in excluded_lines:
-                    continue
+                if line in excluded_lines: continue
 
                 order = str(row.get(config.COL_SQL_ORDER, ""))
                 mat = str(row.get(config.COL_SQL_MATERIAL, ""))
                 desc = str(row.get(config.COL_SQL_DESC, ""))
                 qty = float(row.get(config.COL_SQL_QTY, 0))
 
-                # Dates are already datetime objects from SQL
                 dt_start = row.get(config.COL_SQL_START)
                 dt_end = row.get(config.COL_SQL_END)
-
-                # Basic validation
                 if pd.isna(dt_start): continue
                 if pd.isna(dt_end): dt_end = dt_start
 
@@ -134,8 +133,7 @@ class DataLoader:
                     line=line
                 ))
             except Exception as e:
-                # print(f"Skipping row: {e}")
                 continue
 
-        print(f"Loaded {len(demands)} valid demands (filtered out INM1/INM2).")
+        print(f"Loaded {len(demands)} valid demands.")
         return demands

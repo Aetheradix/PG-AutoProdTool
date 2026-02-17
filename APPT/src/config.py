@@ -65,8 +65,9 @@ OUTPUT_COLUMNS = [
     "Production Line", "Order", "Material", "Description",
     "Batch ID", "GCAS", "System", "Total MSU", "Tech Type",
     "Shift", "Mkg Start Time", "BCT (min)", "Mkg End Time", "Buffer (min)",
-    "Storage Tank",  # <--- NEW COLUMN
-    "Pkg Start Time", "Pkg End Time"
+    "Storage Tank",
+    "Pkg Start Time", "Pkg End Time",
+    "MRP Status" # <--- Added Status Column
 ]
 
 # --- BUSINESS RULES ---
@@ -95,3 +96,15 @@ SHIFT_CONSTRAINTS = [
     {"start": (15, 15), "end": (15, 45), "snap": (15, 15)},
     {"start": (23, 15), "end": (23, 45), "snap": (23, 15)}
 ]
+
+# --- MRP MAPPING ---
+# Key: Recipe Ingredient Name (from sku_master cols like 'cons_12t_sls')
+# Value: List of RM Tank Column Names to sum up
+MRP_INGREDIENTS = {
+    "sls": ["SLS_Tank_A_Level", "SLS_Tank_B_Level"],
+    "betain": ["BetaineTankLevel"],
+    "sle3s": ["SLE3S_Tank_A_Level", "SLE3S_Tank_B_Level"],
+    "hc_base": ["HCBase_Tank_Level"],
+    "lp_base": ["LPBase_Tank_Level"], # Add SurgeTank if needed?
+    "dm5500": ["DM5500_Tank_Level"]
+}

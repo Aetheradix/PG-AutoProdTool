@@ -59,7 +59,7 @@ def main():
     print("--- CONVERTING INPUT FILE TO CLEAN CSV ---")
 
     # Corrected Filename
-    filename = "PACKING PO DETAIL.xls"
+    filename = "packing_plan_7th Jan.xlsx"
     input_file = os.path.join(config.INPUT_DIR, filename)
     output_file = os.path.join(config.INPUT_DIR, "PACKING_PO_DETAIL_Cleaned.csv")
 
