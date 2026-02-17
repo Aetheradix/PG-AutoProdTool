@@ -1,56 +1,52 @@
 import os
-import pandas as pd
+import sys
 import mysql.connector
 from sqlalchemy import create_engine
-from src import config
+from dotenv import load_dotenv
 
-
-def get_engine():
-    """
-    Creates a SQLAlchemy Engine.
-    Preferred for Pandas operations (read_sql).
-    """
-    # Construct connection string: mysql+pymysql://user:pass@host:port/db
-    user = config.DB_USER
-    password = config.DB_PASSWORD
-    host = config.DB_HOST
-    port = config.DB_PORT
-    name = config.DB_NAME
-
-    connection_str = f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
-    engine = create_engine(connection_str)
-    return engine
+# Path setup to find .env if run from subfolder
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+env_path = os.path.join(project_root, '.env')
+load_dotenv(env_path)
 
 
 def get_connection():
-    """
-    Creates a Raw MySQL Connection.
-    Preferred for DDL/Insert operations (migration scripts).
-    """
+    """Returns a raw MySQL connection (for cursors)."""
     try:
-        conn = mysql.connector.connect(
-            host=config.DB_HOST,
-            user=config.DB_USER,
-            password=config.DB_PASSWORD,
-            database=config.DB_NAME,
-            port=config.DB_PORT
+        return mysql.connector.connect(
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            host=os.getenv("DB_HOST", "localhost"),
+            port=int(os.getenv("DB_PORT", "3306")),
+            database=os.getenv("DB_NAME")
         )
-        return conn
-    except mysql.connector.Error as err:
-        print(f"[DB ERROR] {err}")
+    except Exception as e:
+        print(f"DB Connection Error: {e}")
         return None
 
 
-def fetch_table(table_name: str) -> pd.DataFrame:
-    """
-    Fetches an entire table using SQLAlchemy (Pandas compliant).
-    """
-    engine = get_engine()
+def get_engine():
+    """Returns an SQLAlchemy Engine (for pandas read_sql)."""
     try:
-        # Pandas manages the connection opening/closing automatically with the engine
-        query = f"SELECT * FROM {table_name}"
-        df = pd.read_sql(query, engine)
-        return df
+        user = os.getenv("DB_USER")
+        password = os.getenv("DB_PASSWORD")
+        host = os.getenv("DB_HOST", "localhost")
+        port = os.getenv("DB_PORT", "3306")
+        database = os.getenv("DB_NAME")
+
+        # Using mysql-connector-python
+        url = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
+        return create_engine(url)
     except Exception as e:
-        print(f"[DB READ ERROR] {table_name}: {e}")
-        return pd.DataFrame()
+        print(f"DB Engine Error: {e}")
+        return None
+
+
+def fetch_table(table_name):
+    """Helper to fetch full table as DataFrame."""
+    engine = get_engine()
+    if engine:
+        import pandas as pd
+        return pd.read_sql(f"SELECT * FROM {table_name}", engine)
+    return None

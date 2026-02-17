@@ -1,42 +1,63 @@
 import pandas as pd
+from datetime import datetime
 from src import db
 
 
-def get_storage_tank_snapshot():
+def get_storage_tank_snapshot(target_dt=None):
     """
-    Returns a DataFrame containing the CURRENT status of all storage tanks.
-    Performs deduplication in Python to ensure only 1 row per tank.
+    Returns the status of storage tanks.
+    Uses 'DT#_10_#' as the timestamp for Time Travel.
     """
     conn = db.get_connection()
     if not conn:
         return pd.DataFrame()
 
     try:
-        # 1. Fetch Raw Data (Limit columns for speed)
-        # We fetch ALL rows, then filter in Python for accuracy with complex dates
-        query_raw = """
-            SELECT Tagname, GCAS, BATCH_NO, COLOR, DateAndTime 
-            FROM tts_raw_data
-        """
-        df_raw = pd.read_sql(query_raw, conn)
+        # Fetch data including the specific date column
+        # We use quote identifiers for the weird column name
+        query_raw = 'SELECT Tagname, GCAS, BATCH_NO, COLOR, "DT#_10_#" FROM tts_raw_data'
+
+        # Fallback: simple select * if specific select fails due to SQL syntax differences
+        try:
+            df_raw = pd.read_sql(query_raw, conn)
+        except:
+            df_raw = pd.read_sql("SELECT * FROM tts_raw_data", conn)
 
         if df_raw.empty:
             return pd.DataFrame()
 
-        # 2. Convert DateAndTime to datetime objects for sorting
-        # Format example: "Thursday, January 22, 2026 14:09:57"
-        df_raw['dt_obj'] = pd.to_datetime(df_raw['DateAndTime'], errors='coerce')
+        # Rename for easier access if it exists
+        if 'DT#_10_#' in df_raw.columns:
+            df_raw.rename(columns={'DT#_10_#': 'status_date'}, inplace=True)
+        else:
+            # Fallback logic if column not found (should not happen based on inspection)
+            print("[WARN] Column 'DT#_10_#' not found. Using current time.")
+            df_raw['status_date'] = datetime.now()
 
-        # 3. Sort by Date Descending and Deduplicate by Tagname
-        # Keep the FIRST occurrence (which is the latest date)
+        # Convert to datetime (Handling "Thursday, January 22, 2026..." format)
+        df_raw['dt_obj'] = pd.to_datetime(df_raw['status_date'], errors='coerce')
+
+        # FILTER: Time Travel Logic
+        if target_dt:
+            # Try finding data before target
+            df_filtered = df_raw[df_raw['dt_obj'] <= target_dt]
+
+            if df_filtered.empty:
+                print(f"   > [WARN] No storage data found before {target_dt} in 'DT#_10_#'.")
+                print(f"   > Fallback: Using oldest available storage snapshot.")
+                df_raw = df_raw
+            else:
+                print(f"   > Time Travel Successful: Using state as of {target_dt}")
+                df_raw = df_filtered
+
+        # Sort Descending (Newest First) and Keep Latest per Tank
         df_latest = df_raw.sort_values(by='dt_obj', ascending=False).drop_duplicates(subset=['Tagname'], keep='first')
 
-        # 4. Fetch Color Master
+        # Fetch Color Master
         query_colors = "SELECT colour_number, status as status_desc FROM colour_status_master"
         df_colors = pd.read_sql(query_colors, conn)
 
-        # 5. Merge
-        # Ensure join keys are same type
+        # Merge
         df_latest['COLOR'] = df_latest['COLOR'].fillna(0).astype(int)
         df_colors['colour_number'] = df_colors['colour_number'].astype(int)
 
@@ -48,7 +69,7 @@ def get_storage_tank_snapshot():
             how='left'
         )
 
-        # Rename for clarity
+        # Rename final columns
         df_final = df_final.rename(columns={
             'Tagname': 'tank_id',
             'GCAS': 'current_gcas',
@@ -67,20 +88,12 @@ def get_storage_tank_snapshot():
 
 
 def categorize_tank(row):
-    """
-    Helper to determine if a tank is Usable.
-    """
     code = int(row['color_code']) if pd.notna(row['color_code']) else 0
-
     if code == 1:
         return "CLEAN (READY)"
     elif code == 7:
-        # Status 7 = Dirty (Holds Product)
-        # Logic: Can be used if the incoming batch matches 'current_gcas'
         return f"DIRTY ({str(row['current_gcas']).strip()})"
     elif code == 14:
-        # Status 14 = Washout Due (Can be washed then used)
         return "WASHOUT DUE"
     else:
-        # 2=Full, 3=Hold, etc.
         return f"BUSY (Status {code})"

@@ -67,13 +67,16 @@ OUTPUT_COLUMNS = [
     "Shift", "Mkg Start Time", "BCT (min)", "Mkg End Time", "Buffer (min)",
     "Storage Tank",
     "Pkg Start Time", "Pkg End Time",
-    "MRP Status" # <--- Added Status Column
+    "MRP Status"
 ]
 
 # --- BUSINESS RULES ---
 RULE_CLIMBAZOLE = ["climbazole", "climbazone"]
 RULE_CONDITIONER = ["cond", "conditioner"]
 RULE_HC_BASE = ["hc base", "base"]
+
+GCAS_HC_BASE = "95619314"
+GCAS_CLIMBAZOLE = "91879323"
 
 MATCHING_NOISE_WORDS = ["IN GST", "GST", "FC", "PROMO", "NFS", "IN"]
 
@@ -98,13 +101,12 @@ SHIFT_CONSTRAINTS = [
 ]
 
 # --- MRP MAPPING ---
-# Key: Recipe Ingredient Name (from sku_master cols like 'cons_12t_sls')
-# Value: List of RM Tank Column Names to sum up
 MRP_INGREDIENTS = {
     "sls": ["SLS_Tank_A_Level", "SLS_Tank_B_Level"],
     "betain": ["BetaineTankLevel"],
     "sle3s": ["SLE3S_Tank_A_Level", "SLE3S_Tank_B_Level"],
     "hc_base": ["HCBase_Tank_Level"],
-    "lp_base": ["LPBase_Tank_Level"], # Add SurgeTank if needed?
-    "dm5500": ["DM5500_Tank_Level"]
+    "lp_base": ["LPBase_Tank_Level"],
+    "dm5500": ["DM5500_Tank_Level"],
+    "climbazole": ["Climbazole_Tank_Level"]
 }

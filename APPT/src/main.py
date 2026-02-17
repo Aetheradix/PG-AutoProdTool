@@ -3,100 +3,30 @@ import os
 import pandas as pd
 from datetime import datetime, timedelta, time
 
-# Setup Path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 if project_root not in sys.path: sys.path.insert(0, project_root)
 
-from src import config
+from src import config, db
 from src.data_loader import DataLoader
 from src.logic import PlanEnricher, Scheduler, TankScheduler, StorageAssigner
 from src.plan_exporter import upload_to_sql
 from src.update_rm_status import update_tank_status
 from src.storage_manager import get_storage_tank_snapshot
-from src.mrp import MaterialPlanner  # <--- NEW IMPORT
-
-
-def get_shift_for_timestamp(dt: datetime) -> str:
-    t = dt.time()
-    if t >= time(7, 30) and t < time(15, 30): return "A"
-    if t >= time(15, 30) and t < time(23, 30): return "B"
-    return "C"
-
-
-def generate_timeline_data(batches, washouts):
-    if not batches: return pd.DataFrame()
-
-    min_time = min(b.mkg_start_dt for b in batches)
-    max_time = max(b.mkg_end_dt for b in batches)
-
-    if washouts:
-        min_wash = min(w["Start"] for w in washouts)
-        max_wash = max(w["End"] for w in washouts)
-        if min_wash < min_time: min_time = min_wash
-        if max_wash > max_time: max_time = max_wash
-
-    min_time = min_time.replace(minute=0, second=0, microsecond=0)
-    max_time = max_time.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-
-    timeline = []
-    curr = min_time
-    while curr <= max_time:
-        row = {
-            "Time": curr.strftime("%Y-%m-%d %H:%M"),
-            "Shift": get_shift_for_timestamp(curr)
-        }
-        for col in ["12T", "6T", "1.25T"]:
-            row[col] = ""
-
-        for b in batches:
-            if b.mkg_start_dt <= curr < b.mkg_end_dt:
-                col = None
-                if "12T" in b.system:
-                    col = "12T"
-                elif "6T" in b.system:
-                    col = "6T"
-                elif "1.25T" in b.system:
-                    col = "1.25T"
-
-                # Append MRP Warning if exists
-                desc_text = f"{b.id}: {b.desc}"
-                if b.mrp_status != "OK":
-                    desc_text += " [!MAT]"  # Visual flag
-
-                if col: row[col] = desc_text
-
-        for w in washouts:
-            if w["Start"] <= curr < w["End"]:
-                col = None
-                if "12T" in w['System']:
-                    col = "12T"
-                elif "6T" in w['System']:
-                    col = "6T"
-                elif "1.25T" in w['System']:
-                    col = "1.25T"
-                if col: row[col] = w['Desc']
-
-        timeline.append(row)
-        curr += timedelta(minutes=30)
-
-    return pd.DataFrame(timeline)
+from src.mrp import MaterialPlanner
 
 
 def main():
-    print("=== AUTO PRODUCTION PLANNER (FINAL + STORAGE + MRP) ===")
+    print("=== AUTO PRODUCTION PLANNER (FINAL OPTIMIZED) ===")
 
     # 1. Update Sensors
     try:
         update_tank_status()
-    except Exception as e:
-        print(f"[WARN] Failed to update RM Status: {e}")
+    except:
+        pass
 
     # 2. Load Data
-    master_path = os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE)
-    packing_path = os.path.join(config.INPUT_DIR, config.PACKING_PLAN_FILE)
-
-    loader = DataLoader(master_path, packing_path)
+    loader = DataLoader(os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE), "dummy")
     try:
         master_data = loader.load_master_data()
         bulk_map = loader.load_bulk_variant_map()
@@ -105,32 +35,67 @@ def main():
         tank_snapshot = get_storage_tank_snapshot()
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
-        import traceback
-        traceback.print_exc()
         return
 
-    # 3. Logic: Schedule -> Optimize -> Assign Storage
     enricher = PlanEnricher(master_data, bulk_map)
     scheduler = Scheduler(enricher)
     tank_opt = TankScheduler(wo_matrices)
     storage_assigner = StorageAssigner(tank_snapshot)
-
-    raw_batches = scheduler.run_initial_schedule(demands)
-    final_batches, washouts = tank_opt.optimize(raw_batches)
-    storage_assigner.assign_tanks(final_batches)
-
-    # 4. MRP Simulation
     mrp_planner = MaterialPlanner(master_data)
-    mrp_planner.check_plan(final_batches)
 
-    print(f"\nGenerated {len(final_batches)} Batches.")
-    print(f"Generated {len(washouts)} Washout/Cooldown Events.")
+    # --- PLANNING LOOP ---
+    final_batches = []
+    washouts = []
+    max_iterations = 3
 
-    # 5. Outputs
+    for i in range(max_iterations):
+        print(f"\n--- Iteration {i + 1}: Scheduling {len(demands)} orders ---")
+
+        # A. Schedule
+        raw_batches = scheduler.run_initial_schedule(demands)
+
+        # B. Optimize
+        cur_batches, cur_washouts = tank_opt.optimize(raw_batches)
+
+        # C. Assign Storage
+        storage_assigner.assign_tanks(cur_batches)
+
+        # D. Check MRP & Replenish
+        new_orders = mrp_planner.check_plan_and_replenish(cur_batches)
+
+        if new_orders:
+            print(f"   > MRP generated {len(new_orders)} replenishment orders. Re-planning...")
+            demands.extend(new_orders)
+            storage_assigner = StorageAssigner(tank_snapshot)
+        else:
+            print("   > Plan is stable. No new replenishment needed.")
+            final_batches = cur_batches
+            washouts = cur_washouts
+            break
+
+    # --- FINAL SORTING & EXPORT ---
+    print(f"\nFinal Plan: {len(final_batches)} Batches.")
+
     if final_batches:
-        data = []
-        final_batches.sort(key=lambda x: x.id)
+        # Grouping Logic:
+        # 1. 12T System
+        # 2. 6T System
+        # 3. 1.25T System
+        # Within each group -> Sort by Start Time
 
+        def sort_key(b):
+            sys_priority = 99
+            if "12T" in b.system:
+                sys_priority = 1
+            elif "6T" in b.system:
+                sys_priority = 2
+            elif "1.25T" in b.system:
+                sys_priority = 3
+            return (sys_priority, b.mkg_start_dt)
+
+        final_batches.sort(key=sort_key)
+
+        data = []
         for b in final_batches:
             data.append({
                 "Production Line": b.line,
@@ -138,7 +103,7 @@ def main():
                 "Material": b.material,
                 "Description": b.desc,
                 "Batch ID": b.id,
-                "GCAS": b.sku_code,
+                "GCAS": b.sku_code,  # Ensure GCAS is exported
                 "System": b.system,
                 "Total MSU": round(b.total_msu, 4),
                 "Tech Type": b.tech_type,
@@ -150,39 +115,14 @@ def main():
                 "Storage Tank": b.storage_tank,
                 "Pkg Start Time": b.pkg_start_dt,
                 "Pkg End Time": b.pkg_end_dt,
-                "MRP Status": b.mrp_status  # <--- Export
+                "MRP Status": b.mrp_status
             })
 
-        # Excel
-        df_main = pd.DataFrame(data)
-        df_main = df_main[config.OUTPUT_COLUMNS]
-        df_time = generate_timeline_data(final_batches, washouts)
-
+        df = pd.DataFrame(data)
         out_path = os.path.join(config.OUTPUT_DIR, "Final_Production_Plan.xlsx")
+        df.to_excel(out_path, index=False)
+        print(f"Saved to: {out_path}")
 
-        with pd.ExcelWriter(out_path, engine='xlsxwriter') as writer:
-            df_main.to_excel(writer, sheet_name="Schedule", index=False)
-            df_time.to_excel(writer, sheet_name="Tank Timeline", index=False)
-
-            # Formatting
-            workbook = writer.book
-            fmt_red = workbook.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006'})
-
-            ws_sched = writer.sheets["Schedule"]
-            ws_sched.set_column(0, 20, 15)
-            # Conditional Formatting for MRP
-            ws_sched.conditional_format(1, 17, len(df_main), 17, {
-                'type': 'text',
-                'criteria': 'containing',
-                'value': 'LOW',
-                'format': fmt_red
-            })
-
-            writer.sheets["Tank Timeline"].set_column(2, 5, 45)
-
-        print(f"Saved Excel plan to: {out_path}")
-
-        # SQL
         upload_to_sql(final_batches, washouts)
 
 

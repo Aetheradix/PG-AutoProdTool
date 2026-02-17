@@ -1,7 +1,8 @@
 import pandas as pd
 from typing import List, Dict
+from datetime import timedelta
 from src import config, db
-from src.models import ProductionBatch, SKUMeta
+from src.models import ProductionBatch, SKUMeta, Demand
 
 
 class MaterialPlanner:
@@ -11,15 +12,13 @@ class MaterialPlanner:
         self._load_inventory()
 
     def _load_inventory(self):
-        """Loads live tank levels from SQL and pools them by ingredient."""
+        """Loads live tank levels from SQL."""
         print("--- Loading Inventory for MRP ---")
         try:
-            # Fetch latest levels
-            df = pd.read_sql("SELECT tank_name, current_value FROM rm_status_data", db.get_connection())
-
+            # Using get_engine for pandas
+            df = pd.read_sql("SELECT tank_name, current_value FROM rm_status_data", db.get_engine())
             raw_levels = dict(zip(df['tank_name'], df['current_value']))
 
-            # Aggregate based on config map
             for ing_key, tank_list in config.MRP_INGREDIENTS.items():
                 total = 0.0
                 for tank in tank_list:
@@ -27,55 +26,99 @@ class MaterialPlanner:
                     if pd.notna(val):
                         total += float(val)
                 self.inventory[ing_key] = total
-                # print(f"  > {ing_key.upper()}: {total:.2f} kg")
-
         except Exception as e:
             print(f"[MRP Error] Could not load inventory: {e}")
 
-    def check_plan(self, batches: List[ProductionBatch]):
-        """
-        Simulates the plan and flags batches that cause stockouts.
-        Updates the 'mrp_status' field on the batch.
-        """
-        print("--- Running MRP Simulation ---")
+    def check_plan_and_replenish(self, batches: List[ProductionBatch]) -> List[Demand]:
+        print("--- Running MRP Simulation (Replenishment Mode) ---")
 
-        # Sort by usage time (MKG Start)
-        batches.sort(key=lambda x: x.mkg_start_dt)
-
-        # Working copy of inventory so we don't mutate the live view permanently
-        sim_inv = self.inventory.copy()
-
+        events = []
         for b in batches:
-            sku = self.sku_master.get(b.sku_code)
-            if not sku:
-                b.mrp_status = "UNKNOWN_SKU"
-                continue
+            events.append({"time": b.mkg_start_dt, "type": "CONSUME", "batch": b})
+            events.append({"time": b.mkg_end_dt, "type": "PRODUCE", "batch": b})
 
-            # Determine System Prefix (12T vs 6T)
-            sys_prefix = "6t" if "6T" in b.system else "12t"
+        events.sort(key=lambda x: x["time"])
 
-            shortages = []
+        sim_inv = self.inventory.copy()
+        replenish_orders = []
 
-            # Check each ingredient in the mapping
-            for ing_name in config.MRP_INGREDIENTS.keys():
-                # Construct recipe key, e.g., '12t_sls'
-                recipe_key = f"{sys_prefix}_{ing_name}"
+        # We don't need 'ordered_keys' anymore because crediting the inventory prevents duplicates naturally
 
-                required_qty = sku.recipes.get(recipe_key, 0.0)
+        for b in batches: b.mrp_status = "OK"
 
-                if required_qty > 0:
-                    current_stock = sim_inv.get(ing_name, 0.0)
-                    if current_stock >= required_qty:
+        for evt in events:
+            b = evt["batch"]
+            desc_lower = str(b.desc).lower()
+
+            if evt["type"] == "PRODUCE":
+                produced_qty_kg = b.total_msu * config.MSU_UNIT_KG
+                if b.sku_code == config.GCAS_CLIMBAZOLE or "climbazole" in desc_lower:
+                    sim_inv["climbazole"] += produced_qty_kg
+                elif b.sku_code == config.GCAS_HC_BASE or "hc base" in desc_lower:
+                    sim_inv["hc_base"] += produced_qty_kg
+
+            elif evt["type"] == "CONSUME":
+                sku = self.sku_master.get(b.sku_code)
+                if not sku:
+                    b.mrp_status = "UNKNOWN_SKU"
+                    continue
+
+                sys_prefix = "6t" if "6T" in b.system else "12t"
+
+                for ing_name in config.MRP_INGREDIENTS.keys():
+                    recipe_key = f"{sys_prefix}_{ing_name}"
+                    required_qty = sku.recipes.get(recipe_key, 0.0)
+
+                    if required_qty > 0:
+                        current = sim_inv.get(ing_name, 0.0)
+
+                        if current < required_qty:
+                            deficit = required_qty - current
+
+                            can_replenish = False
+                            rep_gcas = ""
+                            rep_desc = ""
+                            qty_to_order = 0.0
+
+                            if ing_name == "hc_base":
+                                can_replenish = True
+                                rep_gcas = config.GCAS_HC_BASE
+                                rep_desc = "Auto-Replenishment HC Base"
+                                # Logic: If deficit is huge, order 12T size, else 6T size
+                                qty_to_order = 5900.0 if deficit > 2900 else 2900.0
+
+                            elif ing_name == "climbazole":
+                                can_replenish = True
+                                rep_gcas = config.GCAS_CLIMBAZOLE
+                                rep_desc = "Auto-Replenishment Climbazole"
+                                qty_to_order = 1200.0
+
+                            if can_replenish:
+                                # 1. Create Order
+                                needed_time = b.mkg_start_dt
+                                new_demand = Demand(
+                                    order_id=f"AUTO_{len(replenish_orders) + 1}",
+                                    material_code=rep_gcas,
+                                    description=rep_desc,
+                                    quantity=qty_to_order,
+                                    pkg_start_dt=needed_time,
+                                    pkg_end_dt=needed_time + timedelta(hours=1),
+                                    line="INTERNAL"
+                                )
+                                replenish_orders.append(new_demand)
+
+                                # 2. CRITICAL FIX: Credit Inventory IMMEDIATELY
+                                # This simulates the order arriving just in time
+                                sim_inv[ing_name] += qty_to_order
+
+                                print(f"   [!] Shortage of {ing_name} (-{deficit:.0f}kg). Queueing {qty_to_order}kg.")
+
+                                b.mrp_status = f"REPLENISHED: {ing_name.upper()}"
+                            else:
+                                # Cannot replenish automatically (e.g., SLS from supplier)
+                                b.mrp_status = f"LOW: {ing_name.upper()}"
+
+                        # Deduct consumption
                         sim_inv[ing_name] -= required_qty
-                    else:
-                        shortages.append(ing_name)
-                        # We still subtract to show deepening debt?
-                        # Or just stop? Let's subtract to track total deficit.
-                        sim_inv[ing_name] -= required_qty
 
-            if shortages:
-                b.mrp_status = f"LOW: {', '.join(shortages).upper()}"
-            else:
-                b.mrp_status = "OK"
-
-        print("MRP Simulation Complete.")
+        return replenish_orders

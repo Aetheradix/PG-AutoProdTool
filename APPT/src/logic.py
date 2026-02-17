@@ -6,6 +6,9 @@ from src import config
 from src.models import SKUMeta, Demand, ProductionBatch, VariantInfo
 
 
+# ---------------------------------------------------------
+# 1. PLAN ENRICHER
+# ---------------------------------------------------------
 class PlanEnricher:
     def __init__(self, master_data: Dict[str, SKUMeta], bulk_map: Dict[str, VariantInfo]):
         self.master_data = master_data
@@ -24,6 +27,9 @@ class PlanEnricher:
         return re.sub(r'[^A-Z0-9]', '', t)
 
     def find_variant_for_demand(self, demand: Demand) -> Optional[VariantInfo]:
+        if demand.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
+            return VariantInfo(gcas=demand.material_code, weight_per_container=0)
+
         original_desc = demand.description.strip()
         if original_desc in self.bulk_map: return self.bulk_map[original_desc]
         demand_clean = self._normalize_text(original_desc)
@@ -33,7 +39,7 @@ class PlanEnricher:
                 return variant
         desc_lower = original_desc.lower()
         for keyword in config.RULE_CLIMBAZOLE:
-            if keyword in desc_lower: return VariantInfo(gcas="PREMIX_CLIMBAZOLE", weight_per_container=0)
+            if keyword in desc_lower: return VariantInfo(gcas=config.GCAS_CLIMBAZOLE, weight_per_container=0)
         return None
 
     def calculate_msu(self, quantity: float, weight_per_container: float) -> float:
@@ -43,10 +49,33 @@ class PlanEnricher:
     def select_system(self, demand: Demand, sku: SKUMeta, variant: VariantInfo) -> Tuple[str, float, float]:
         desc_lower = str(demand.description).lower()
 
-        # 1. Climbazole
-        for kw in config.RULE_CLIMBAZOLE:
-            if kw in desc_lower: return ("1.25T", 180, 0.0)
+        # 1. Climbazole Premix (GCAS 91879323)
+        if demand.material_code == config.GCAS_CLIMBAZOLE or any(k in desc_lower for k in config.RULE_CLIMBAZOLE):
+            # FIXED: 1200kg batch size
+            # 1200kg / 2571 (kg/MSU) = ~0.466 MSU
+            msu_size = 1200.0 / config.MSU_UNIT_KG
+            return ("1.25T", 180, msu_size)
 
+        # 2. HC Base (GCAS 95619314)
+        if demand.material_code == config.GCAS_HC_BASE or any(k in desc_lower for k in config.RULE_HC_BASE):
+            # Check quantity needed. If small deficit (< 2900kg), use 6T. Else use 12T.
+            needed_kg = demand.quantity
+
+            # Default to 12T if needed quantity is high or unspecified (0)
+            target = "12T"
+            if needed_kg > 0 and needed_kg <= 2900:
+                target = "6T"
+
+            # Set fixed batch sizes
+            if target == "12T":
+                batch_kg = 5900.0
+            else:
+                batch_kg = 2900.0
+
+            msu_size = batch_kg / config.MSU_UNIT_KG
+            return (target, self._get_bct(sku, target), msu_size)
+
+        # Standard Logic for Consumer Goods
         msu = self.calculate_msu(demand.quantity, variant.weight_per_container)
         target_size = "12T"
         if msu > 0 and msu < config.MSU_THRESHOLD_6T: target_size = "6T"
@@ -64,6 +93,9 @@ class PlanEnricher:
         return config.DEFAULT_DURATION
 
 
+# ---------------------------------------------------------
+# 2. SCHEDULER (INITIAL PLACEMENT)
+# ---------------------------------------------------------
 class Scheduler:
     def __init__(self, enricher: PlanEnricher):
         self.enricher = enricher
@@ -94,21 +126,16 @@ class Scheduler:
     def run_initial_schedule(self, demands: List[Demand]) -> List[ProductionBatch]:
         print(f"--- Calculating Initial Schedule ({len(demands)} demands) ---")
         batch_id_counter = 1
+        self.batches = []  # Reset
 
         for d in demands:
             variant = self.enricher.find_variant_for_demand(d)
             gcas = variant.gcas if variant else "UNKNOWN"
-            system = "System TBD"
-            bct = config.DEFAULT_DURATION
-            msu = 0.0
+            if d.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
+                gcas = d.material_code
 
-            if gcas == "PREMIX_CLIMBAZOLE":
-                system = "1.25T"
-                bct = 180
-            else:
-                sku = self.enricher.master_data.get(gcas)
-                # FIXED LINE BELOW: Added 0.0 as the second argument
-                system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK", 0.0))
+            sku = self.enricher.master_data.get(gcas)
+            system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK", 0.0))
 
             min_buffer = self._get_buffer_time(d.description)
             raw_mkg_end = d.pkg_start_dt - timedelta(minutes=min_buffer)
@@ -119,11 +146,14 @@ class Scheduler:
 
             shift = self._get_shift(final_mkg_start)
             tech_type = "Single"
-            sku_obj = self.enricher.master_data.get(gcas)
-            if sku_obj: tech_type = sku_obj.tech_class
+            if sku: tech_type = sku.tech_class
+
+            bid = f"B{batch_id_counter:03d}"
+            if "Replenishment" in d.description:
+                bid = f"REP{batch_id_counter:02d}"
 
             batch = ProductionBatch(
-                id=f"B{batch_id_counter:03d}",
+                id=bid,
                 sku_code=gcas,
                 system=system,
                 shift=shift,
@@ -146,6 +176,9 @@ class Scheduler:
         return self.batches
 
 
+# ---------------------------------------------------------
+# 3. TANK SCHEDULER (OPTIMIZATION)
+# ---------------------------------------------------------
 class TankScheduler:
     def __init__(self, washout_matrices: Dict[str, Dict]):
         self.washout_matrices = washout_matrices
@@ -239,6 +272,9 @@ class TankScheduler:
         return final_batches, washouts
 
 
+# ---------------------------------------------------------
+# 4. STORAGE ASSIGNER
+# ---------------------------------------------------------
 class StorageAssigner:
     def __init__(self, tank_snapshot: pd.DataFrame):
         self.tanks = {}
@@ -277,12 +313,16 @@ class StorageAssigner:
 
                 score = -1
 
+                # 1. Dirty + Same Product (Best)
                 if state["status_code"] == 7 and state["current_gcas"] == gcas:
                     score = 1
+                # 2. Clean (Good)
                 elif state["status_code"] == 1:
                     score = 2
+                # 3. Washout Due (Okay)
                 elif state["status_code"] == 14:
                     score = 3
+                # 4. Dirty + Diff Product (Okay, needs wash)
                 elif state["status_code"] == 7:
                     score = 4
 
