@@ -10,6 +10,7 @@ from src.api.routes import (
     bulk_details,
     rm_data,
     production_schedule,
+    bpr_pdr,
 )
 
 app = FastAPI(
@@ -41,6 +42,9 @@ app.include_router(
     production_schedule.router,
     prefix="/api/v1/production-schedule",
     tags=["Production Schedule"],
+)
+app.include_router(
+    bpr_pdr.router, prefix="/api/v1/bpr-pdr", tags=["BPR-PDR"]
 )
 
 
