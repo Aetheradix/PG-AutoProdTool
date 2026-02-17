@@ -9,6 +9,8 @@ class SKUMeta:
     technology: str
     tech_class: str
     bct_by_system: Dict[str, float]
+    # Recipes: Key = '12T_sls', Value = Consumption Amount
+    recipes: Dict[str, float] = field(default_factory=dict)
 
 @dataclass
 class VariantInfo:
@@ -43,4 +45,5 @@ class ProductionBatch:
     total_msu: float
     line: str
     tech_type: str
-    storage_tank: str = "TBD"  # <--- NEW FIELD
+    storage_tank: str = "TBD"
+    mrp_status: str = "OK" # <--- New Field for MRP Alert

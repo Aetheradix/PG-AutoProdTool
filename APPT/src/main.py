@@ -13,7 +13,8 @@ from src.data_loader import DataLoader
 from src.logic import PlanEnricher, Scheduler, TankScheduler, StorageAssigner
 from src.plan_exporter import upload_to_sql
 from src.update_rm_status import update_tank_status
-from src.storage_manager import get_storage_tank_snapshot  # New Import
+from src.storage_manager import get_storage_tank_snapshot
+from src.mrp import MaterialPlanner  # <--- NEW IMPORT
 
 
 def get_shift_for_timestamp(dt: datetime) -> str:
@@ -57,7 +58,13 @@ def generate_timeline_data(batches, washouts):
                     col = "6T"
                 elif "1.25T" in b.system:
                     col = "1.25T"
-                if col: row[col] = f"{b.id}: {b.desc}"
+
+                # Append MRP Warning if exists
+                desc_text = f"{b.id}: {b.desc}"
+                if b.mrp_status != "OK":
+                    desc_text += " [!MAT]"  # Visual flag
+
+                if col: row[col] = desc_text
 
         for w in washouts:
             if w["Start"] <= curr < w["End"]:
@@ -77,7 +84,7 @@ def generate_timeline_data(batches, washouts):
 
 
 def main():
-    print("=== AUTO PRODUCTION PLANNER (FINAL + STORAGE) ===")
+    print("=== AUTO PRODUCTION PLANNER (FINAL + STORAGE + MRP) ===")
 
     # 1. Update Sensors
     try:
@@ -95,29 +102,31 @@ def main():
         bulk_map = loader.load_bulk_variant_map()
         demands = loader.load_packing_plan()
         wo_matrices = loader.load_washout_matrices()
-        tank_snapshot = get_storage_tank_snapshot()  # Load Storage Snapshot
+        tank_snapshot = get_storage_tank_snapshot()
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
         import traceback
         traceback.print_exc()
         return
 
-    # 3. Logic: Make Schedule -> Optimize Washouts -> Assign Storage
+    # 3. Logic: Schedule -> Optimize -> Assign Storage
     enricher = PlanEnricher(master_data, bulk_map)
     scheduler = Scheduler(enricher)
     tank_opt = TankScheduler(wo_matrices)
-    storage_assigner = StorageAssigner(tank_snapshot)  # Init Assigner
+    storage_assigner = StorageAssigner(tank_snapshot)
 
     raw_batches = scheduler.run_initial_schedule(demands)
     final_batches, washouts = tank_opt.optimize(raw_batches)
-
-    # Assign Storage Tanks
     storage_assigner.assign_tanks(final_batches)
+
+    # 4. MRP Simulation
+    mrp_planner = MaterialPlanner(master_data)
+    mrp_planner.check_plan(final_batches)
 
     print(f"\nGenerated {len(final_batches)} Batches.")
     print(f"Generated {len(washouts)} Washout/Cooldown Events.")
 
-    # 4. Outputs
+    # 5. Outputs
     if final_batches:
         data = []
         final_batches.sort(key=lambda x: x.id)
@@ -138,9 +147,10 @@ def main():
                 "BCT (min)": b.bct,
                 "Mkg End Time": b.mkg_end_dt,
                 "Buffer (min)": b.buffer_min,
-                "Storage Tank": b.storage_tank,  # <--- Added
+                "Storage Tank": b.storage_tank,
                 "Pkg Start Time": b.pkg_start_dt,
-                "Pkg End Time": b.pkg_end_dt
+                "Pkg End Time": b.pkg_end_dt,
+                "MRP Status": b.mrp_status  # <--- Export
             })
 
         # Excel
@@ -154,8 +164,20 @@ def main():
             df_main.to_excel(writer, sheet_name="Schedule", index=False)
             df_time.to_excel(writer, sheet_name="Tank Timeline", index=False)
 
-            for sheet in writer.sheets.values():
-                sheet.set_column(0, 15, 20)
+            # Formatting
+            workbook = writer.book
+            fmt_red = workbook.add_format({'bg_color': '#FFC7CE', 'font_color': '#9C0006'})
+
+            ws_sched = writer.sheets["Schedule"]
+            ws_sched.set_column(0, 20, 15)
+            # Conditional Formatting for MRP
+            ws_sched.conditional_format(1, 17, len(df_main), 17, {
+                'type': 'text',
+                'criteria': 'containing',
+                'value': 'LOW',
+                'format': fmt_red
+            })
+
             writer.sheets["Tank Timeline"].set_column(2, 5, 45)
 
         print(f"Saved Excel plan to: {out_path}")
