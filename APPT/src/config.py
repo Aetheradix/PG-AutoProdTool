@@ -25,13 +25,7 @@ DB_NAME = os.getenv("DB_NAME")
 
 # --- FILE NAMES ---
 MASTER_DATA_FILE = "Master Data - Test.xlsx"
-PACKING_PLAN_FILE = "packing_plan_7th Jan.xlsx"
-
-# Washout Matrices
-WO_FILE_FMT = "FMT_WO_flat.csv"
-WO_FILE_MMT_6T = "MMT_6T_flat.csv"
-WO_FILE_MMT_12T = "MMT_12T_flat.csv"
-WO_FILE_PST = "PST_WO_flat.csv"
+PACKING_PLAN_FILE = "packing_plan.xlsx"
 
 # --- MASTER DATA CONFIG ---
 SHEET_MASTER_DATA = 0
@@ -49,31 +43,29 @@ COL_VAR_GCAS = "Bulk GCAS"
 COL_VAR_WEIGHT = "Weight per Container (KG)"
 
 # CONDENSED SYSTEM MAPPING
-# Merging FMT and MMT columns into generic tank sizes
 SYSTEM_COL_MAP = {
-    10: "12T",  # Was 12T FMT
-    11: "12T",  # Was 12T MMT
-    12: "6T",   # Was 6T FMT
-    13: "6T"    # Was 6T MMT
+    10: "12T",
+    11: "12T",
+    12: "6T",
+    13: "6T"
 }
 
-# --- PACKING PLAN CONFIG ---
-SHEET_PACKING = 0
-COL_PACK_ORDER = "Order"
-COL_PACK_MATERIAL = "Material"
-COL_PACK_DESC = "Description"
-COL_PACK_QTY = "Planned Quantity"
-COL_PACK_LINE = "Production Line"
-COL_PACK_START_DATE = "Start Date"
-COL_PACK_START_TIME = "Start Time"
-COL_PACK_END_DATE = "End Date"
-COL_PACK_END_TIME = "End Time"
+# --- PACKING PO CONFIG (SQL) ---
+TABLE_PACKING_PO = "packing_po"
+COL_SQL_LINE = "line"
+COL_SQL_ORDER = "order_no"
+COL_SQL_MATERIAL = "p_code"
+COL_SQL_DESC = "description"
+COL_SQL_QTY = "planned_qty"
+COL_SQL_START = "start_datetime"
+COL_SQL_END = "end_datetime"
 
 # --- OUTPUT CONFIG ---
 OUTPUT_COLUMNS = [
     "Production Line", "Order", "Material", "Description",
     "Batch ID", "GCAS", "System", "Total MSU", "Tech Type",
     "Shift", "Mkg Start Time", "BCT (min)", "Mkg End Time", "Buffer (min)",
+    "Storage Tank",  # <--- NEW COLUMN
     "Pkg Start Time", "Pkg End Time"
 ]
 
@@ -92,6 +84,11 @@ BUFFER_COND = 1440
 DEFAULT_DURATION = 90
 WASHOUT_DURATION = 20
 
+# --- CONDITIONER SPECIFICS ---
+COND_POST_WASH = 60
+COND_COOLDOWN = 30
+
+# --- SHIFT LOGIC ---
 SHIFT_TIMES = {"A_START": (7, 30), "B_START": (15, 30), "C_START": (23, 30)}
 SHIFT_CONSTRAINTS = [
     {"start": (7, 15), "end": (7, 45), "snap": (7, 15)},

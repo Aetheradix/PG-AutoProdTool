@@ -1,6 +1,7 @@
 import re
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta, time
+import pandas as pd
 from src import config
 from src.models import SKUMeta, Demand, ProductionBatch, VariantInfo
 
@@ -46,24 +47,20 @@ class PlanEnricher:
         for kw in config.RULE_CLIMBAZOLE:
             if kw in desc_lower: return ("1.25T", 180, 0.0)
 
-        # 2. Size Calc
         msu = self.calculate_msu(demand.quantity, variant.weight_per_container)
         target_size = "12T"
         if msu > 0 and msu < config.MSU_THRESHOLD_6T: target_size = "6T"
 
-        # 3. Conditioner (Forces 6T)
+        # 3. Conditioner
         for kw in config.RULE_CONDITIONER:
-            if kw in desc_lower: return ("6T", self._get_bct(sku, "6T"), msu)
+            if kw in desc_lower:
+                return ("6T", self._get_bct(sku, "6T"), msu)
 
-        # 4. HC Base & Shampoo (Uses calculated size)
-        # We stripped the FMT/MMT suffix, so we just ask for "12T" or "6T"
         return (target_size, self._get_bct(sku, target_size), msu)
 
     def _get_bct(self, sku: SKUMeta, target_system: str) -> float:
         if not sku: return config.DEFAULT_DURATION
-        # Exact Match (e.g. "12T" in "12T")
         if target_system in sku.bct_by_system: return sku.bct_by_system[target_system]
-
         return config.DEFAULT_DURATION
 
 
@@ -110,7 +107,8 @@ class Scheduler:
                 bct = 180
             else:
                 sku = self.enricher.master_data.get(gcas)
-                system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK"))
+                # FIXED LINE BELOW: Added 0.0 as the second argument
+                system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK", 0.0))
 
             min_buffer = self._get_buffer_time(d.description)
             raw_mkg_end = d.pkg_start_dt - timedelta(minutes=min_buffer)
@@ -152,32 +150,26 @@ class TankScheduler:
     def __init__(self, washout_matrices: Dict[str, Dict]):
         self.washout_matrices = washout_matrices
 
-    def _get_washout(self, prev_batch: ProductionBatch, next_batch: ProductionBatch) -> int:
-        """
-        Determines washout duration between two batches.
-        Prev/Next refers to schedule order (Target/Source in matrix).
-        """
+    def _is_conditioner(self, batch: ProductionBatch) -> bool:
+        desc_lower = str(batch.desc).lower()
+        for kw in config.RULE_CONDITIONER:
+            if kw in desc_lower: return True
+        return False
 
-        # --- FIX 1: STRICT SAME-PRODUCT OVERRIDE ---
-        # If GCAS codes match, FORCE 0 washout, ignoring matrix.
-        if str(prev_batch.sku_code).strip() == str(next_batch.sku_code).strip():
-            return 0
+    def _get_matrix_washout(self, prev_batch: ProductionBatch, next_batch: ProductionBatch) -> int:
+        if str(prev_batch.sku_code).strip() == str(next_batch.sku_code).strip(): return 0
 
-        # Matrix Lookup
         matrix_key = "FMT"
         if "6T" in next_batch.system: matrix_key = "MMT_6T"
 
         rules = self.washout_matrices.get(matrix_key, {})
         key = (str(next_batch.sku_code).strip(), str(prev_batch.sku_code).strip())
 
-        if key in rules:
-            return rules[key]
-
-        # Default Washout if different and not in matrix
+        if key in rules: return rules[key]
         return config.WASHOUT_DURATION
 
     def optimize(self, batches: List[ProductionBatch]) -> Tuple[List[ProductionBatch], List[dict]]:
-        print("--- Optimizing Tank Queue (Condensed) ---")
+        print("--- Optimizing Tank Queue (Hidden Cooldown) ---")
 
         tanks = {"Tank_12T": [], "Tank_6T": [], "Tank_1.25T": [], "Other": []}
         for b in batches:
@@ -205,8 +197,24 @@ class TankScheduler:
                     scheduled.append(b)
                     last_scheduled_batch = b
                 else:
-                    gap_needed = self._get_washout(last_scheduled_batch, b)
-                    latest_end = last_scheduled_batch.mkg_start_dt - timedelta(minutes=gap_needed)
+                    is_b_cond = self._is_conditioner(b)
+                    is_last_cond = self._is_conditioner(last_scheduled_batch)
+
+                    wash_dur = 0
+                    wash_type = None
+
+                    if is_b_cond:
+                        wash_dur = config.COND_POST_WASH
+                        wash_type = "COND_WASH"
+                    else:
+                        wash_dur = self._get_matrix_washout(last_scheduled_batch, b)
+                        if wash_dur > 0: wash_type = "STD_WASH"
+
+                    required_gap_after_b = wash_dur
+                    if is_last_cond:
+                        required_gap_after_b += config.COND_COOLDOWN
+
+                    latest_end = last_scheduled_batch.mkg_start_dt - timedelta(minutes=required_gap_after_b)
 
                     if b.mkg_end_dt > latest_end:
                         new_end = latest_end
@@ -215,17 +223,80 @@ class TankScheduler:
                         b.mkg_start_dt = new_start
                         b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
 
-                    if gap_needed > 0:
-                        # --- FIX 2: CORRECT VISUAL DURATION ---
-                        # Washout happens immediately after the earlier batch
+                    if wash_type:
+                        desc = "COND WASH (60m)" if wash_type == "COND_WASH" else "WASHOUT"
                         washouts.append({
                             "System": b.system,
                             "Start": b.mkg_end_dt,
-                            "End": b.mkg_end_dt + timedelta(minutes=gap_needed),  # End = Start + 20 mins
-                            "Desc": "WASHOUT"
+                            "End": b.mkg_end_dt + timedelta(minutes=wash_dur),
+                            "Desc": desc
                         })
+
                     scheduled.append(b)
                     last_scheduled_batch = b
             final_batches.extend(scheduled)
 
         return final_batches, washouts
+
+
+class StorageAssigner:
+    def __init__(self, tank_snapshot: pd.DataFrame):
+        self.tanks = {}
+        if not tank_snapshot.empty:
+            for _, row in tank_snapshot.iterrows():
+                tid = row['tank_id']
+                is_usable = False
+
+                code = int(row['color_code']) if pd.notna(row['color_code']) else 0
+                gcas = str(row['current_gcas']).strip()
+
+                if code in [1, 7, 14]:
+                    is_usable = True
+
+                self.tanks[tid] = {
+                    "available_at": datetime.min,
+                    "status_code": code,
+                    "current_gcas": gcas,
+                    "is_usable": is_usable
+                }
+
+    def assign_tanks(self, batches: List[ProductionBatch]):
+        print("--- Assigning Storage Tanks ---")
+        batches.sort(key=lambda x: x.mkg_end_dt)
+
+        for b in batches:
+            needed_start = b.mkg_end_dt
+            needed_end = b.pkg_end_dt
+            gcas = str(b.sku_code).strip()
+
+            candidates = []
+
+            for tid, state in self.tanks.items():
+                if not state["is_usable"]: continue
+                if state["available_at"] > needed_start: continue
+
+                score = -1
+
+                if state["status_code"] == 7 and state["current_gcas"] == gcas:
+                    score = 1
+                elif state["status_code"] == 1:
+                    score = 2
+                elif state["status_code"] == 14:
+                    score = 3
+                elif state["status_code"] == 7:
+                    score = 4
+
+                if score > 0:
+                    candidates.append((score, tid))
+
+            candidates.sort(key=lambda x: x[0])
+
+            if candidates:
+                best_tank = candidates[0][1]
+                b.storage_tank = best_tank
+
+                self.tanks[best_tank]["available_at"] = needed_end
+                self.tanks[best_tank]["current_gcas"] = gcas
+                self.tanks[best_tank]["status_code"] = 7
+            else:
+                b.storage_tank = "NO_TANK"
