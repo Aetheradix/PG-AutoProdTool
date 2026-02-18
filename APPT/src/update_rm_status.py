@@ -13,37 +13,51 @@ if project_root not in sys.path:
 def update_tank_status(target_dt=None):
     print("--- UPDATING RM TANK STATUS (SIMULATION AWARE) ---")
 
-    conn = db.get_connection()
-    if not conn:
-        print("DB Connection Failed.")
-        return
+    conn = db.get_connection()  # For updates we still use raw cursor
+    if not conn: return
 
     try:
         cursor = conn.cursor()
 
-        # Fetch chunk of data
-        query = "SELECT * FROM rm_data ORDER BY id ASC LIMIT 5000" if target_dt else "SELECT * FROM rm_data ORDER BY id DESC LIMIT 1"
+        # OPTIMIZATION: Don't select *, select only what we need if possible.
+        # But since columns are dynamic (tank names), we have to be careful.
+        # We will limit by ID to get the latest chunk more efficiently.
+
+        # Determine the ID range or Date range if possible.
+        # Since we don't know the exact ID, we fetch the last 1000 rows only.
+        query = "SELECT * FROM rm_data ORDER BY id DESC LIMIT 1000"
+
+        # Use SQLAlchemy engine for reading to avoid warnings
         df_raw = pd.read_sql(query, db.get_engine())
 
         if df_raw.empty:
             print("[WARN] 'rm_data' table is empty.")
             return
 
-        # FIX: Normalize column name 'DateandTime' -> 'DateAndTime'
+        # Normalize column name
         df_raw.columns = [c.replace('DateandTime', 'DateAndTime') for c in df_raw.columns]
+
+        if 'DateAndTime' not in df_raw.columns:
+            print("[WARN] DateAndTime column missing in rm_data")
+            return
 
         latest_data = None
 
         if target_dt:
             df_raw['dt_obj'] = pd.to_datetime(df_raw['DateAndTime'], errors='coerce')
+
+            # Filter in memory (since we only fetched 1000 rows, this is fast)
             df_hist = df_raw[df_raw['dt_obj'] <= target_dt]
 
             if not df_hist.empty:
                 latest_data = df_hist.sort_values(by='dt_obj', ascending=False).iloc[0]
                 print(f"   > Found historical data from: {latest_data['dt_obj']}")
             else:
-                print(f"   > [WARN] No RM data found before {target_dt}. Using oldest available.")
+                # If 1000 rows isn't enough to find history, we might need a specific query
+                # But for now, fallback to oldest in this chunk
+                print(f"   > [WARN] No data found in recent chunk before {target_dt}.")
                 latest_data = df_raw.sort_values(by='dt_obj', ascending=True).iloc[0]
+                print(f"   > Fallback: Using data from {latest_data['dt_obj']}")
         else:
             latest_data = df_raw.iloc[0]
 
@@ -72,3 +86,7 @@ def update_tank_status(target_dt=None):
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
+
+
+if __name__ == "__main__":
+    update_tank_status()
