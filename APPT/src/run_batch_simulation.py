@@ -22,13 +22,13 @@ YEAR = 2026
 
 # List of files to process
 TARGET_FILES = [
-    "packing_plan_7th Jan.xlsx",
-    "packing_plan_8th Jan.xlsx",
+#   "packing_plan_7th Jan.xlsx",
+#    "packing_plan_8th Jan.xlsx",
 #    "packing_plan_9th Jan.xlsx",
 #    "packing_plan_10th Jan.xlsx",
 #    "packing_plan_12th Jan.xlsx",
 #    "packing_plan_13th Jan.xlsx",
-#    "packing_plan_14th Jan.xlsx",
+    "packing_plan_14th Jan.xlsx",
 #    "packing_plan_15th Jan.xlsx",
 #    "packing_plan_16th Jan.xlsx",
 #    "packing_plan_17th Jan.xlsx",
@@ -254,7 +254,7 @@ def run_simulation_for_date(file_name, target_date):
 
 
 def main():
-    print("--- STARTING BATCH SIMULATION ---")
+    print("--- STARTING SIMULATION ---")
 
     for fname in TARGET_FILES:
         t_date = parse_date_from_filename(fname)

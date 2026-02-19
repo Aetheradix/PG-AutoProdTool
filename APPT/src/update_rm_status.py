@@ -11,58 +11,56 @@ if project_root not in sys.path:
 
 
 def update_tank_status(target_dt=None):
-    print("--- UPDATING RM TANK STATUS (SIMULATION AWARE) ---")
+    print("--- UPDATING RM TANK STATUS (OPTIMIZED) ---")
 
-    conn = db.get_connection()  # For updates we still use raw cursor
+    conn = db.get_connection()
     if not conn: return
 
     try:
         cursor = conn.cursor()
-
-        # OPTIMIZATION: Don't select *, select only what we need if possible.
-        # But since columns are dynamic (tank names), we have to be careful.
-        # We will limit by ID to get the latest chunk more efficiently.
-
-        # Determine the ID range or Date range if possible.
-        # Since we don't know the exact ID, we fetch the last 1000 rows only.
-        query = "SELECT * FROM rm_data ORDER BY id DESC LIMIT 1000"
-
-        # Use SQLAlchemy engine for reading to avoid warnings
-        df_raw = pd.read_sql(query, db.get_engine())
-
-        if df_raw.empty:
-            print("[WARN] 'rm_data' table is empty.")
-            return
-
-        # Normalize column name
-        df_raw.columns = [c.replace('DateandTime', 'DateAndTime') for c in df_raw.columns]
-
-        if 'DateAndTime' not in df_raw.columns:
-            print("[WARN] DateAndTime column missing in rm_data")
-            return
+        engine = db.get_engine()
 
         latest_data = None
 
         if target_dt:
-            df_raw['dt_obj'] = pd.to_datetime(df_raw['DateAndTime'], errors='coerce')
+            # HISTORICAL MODE (Simulation)
+            # We must use the time column. We assume 'DateAndTime' exists.
+            # To avoid timeouts, we select only the necessary columns + time.
+            # But since columns are dynamic, we limit the row count drastically.
+            query = "SELECT * FROM rm_data ORDER BY id DESC LIMIT 500"
+            df_raw = pd.read_sql(query, engine)
 
-            # Filter in memory (since we only fetched 1000 rows, this is fast)
-            df_hist = df_raw[df_raw['dt_obj'] <= target_dt]
+            # Normalize Name
+            df_raw.columns = [c.replace('DateandTime', 'DateAndTime') for c in df_raw.columns]
 
-            if not df_hist.empty:
-                latest_data = df_hist.sort_values(by='dt_obj', ascending=False).iloc[0]
-                print(f"   > Found historical data from: {latest_data['dt_obj']}")
+            if 'DateAndTime' in df_raw.columns:
+                df_raw['dt_obj'] = pd.to_datetime(df_raw['DateAndTime'], errors='coerce')
+                df_hist = df_raw[df_raw['dt_obj'] <= target_dt]
+                if not df_hist.empty:
+                    latest_data = df_hist.sort_values(by='dt_obj', ascending=False).iloc[0]
+                    print(f"   > Found historical data from: {latest_data['dt_obj']}")
+                else:
+                    print(f"   > [WARN] No history found in recent 500 rows. Using oldest.")
+                    latest_data = df_raw.iloc[-1]
             else:
-                # If 1000 rows isn't enough to find history, we might need a specific query
-                # But for now, fallback to oldest in this chunk
-                print(f"   > [WARN] No data found in recent chunk before {target_dt}.")
-                latest_data = df_raw.sort_values(by='dt_obj', ascending=True).iloc[0]
-                print(f"   > Fallback: Using data from {latest_data['dt_obj']}")
+                latest_data = df_raw.iloc[0]
+
         else:
-            latest_data = df_raw.iloc[0]
+            # LIVE MODE (Standard)
+            # FASTEST METHOD: Get Max ID first
+            cursor.execute("SELECT MAX(id) FROM rm_data")
+            max_id = cursor.fetchone()[0]
+
+            if max_id:
+                query = f"SELECT * FROM rm_data WHERE id = {max_id}"
+                df_raw = pd.read_sql(query, engine)
+                latest_data = df_raw.iloc[0]
+            else:
+                print("[WARN] rm_data table is empty.")
+                return
 
         # Update Status Table
-        df_config = pd.read_sql("SELECT tank_name, deadstock_value FROM rm_status_data", db.get_engine())
+        df_config = pd.read_sql("SELECT tank_name, deadstock_value FROM rm_status_data", engine)
         updates = []
 
         for _, row in df_config.iterrows():
@@ -82,7 +80,7 @@ def update_tank_status(target_dt=None):
             print(f"   > Successfully updated {len(updates)} tanks.")
 
     except Exception as e:
-        print(f"Error during update: {e}")
+        print(f"   > [Error] Failed to update RM status: {e}")
     finally:
         if cursor: cursor.close()
         if conn: conn.close()
