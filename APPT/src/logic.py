@@ -84,7 +84,7 @@ class PlanEnricher:
 
 
 # ---------------------------------------------------------
-# 2. SCHEDULER (INITIAL PLACEMENT)
+# 2. SCHEDULER (INITIAL PLACEMENT & AGGREGATION)
 # ---------------------------------------------------------
 class Scheduler:
     def __init__(self, enricher: PlanEnricher):
@@ -114,15 +114,95 @@ class Scheduler:
         return "C"
 
     def run_initial_schedule(self, demands: List[Demand]) -> List[ProductionBatch]:
-        print(f"--- Calculating Initial Schedule ({len(demands)} demands) ---")
-        batch_id_counter = 1
-        self.batches = []
+        print(f"--- Calculating Initial Schedule ({len(demands)} raw demands) ---")
 
+        # --- STEP 1: PRE-PROCESS & CALCULATE MSU ---
+        enriched_demands = []
         for d in demands:
             variant = self.enricher.find_variant_for_demand(d)
             gcas = variant.gcas if variant else "UNKNOWN"
             if d.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
                 gcas = d.material_code
+
+            msu = 0.0
+            if gcas == config.GCAS_CLIMBAZOLE:
+                msu = 1200.0 / config.MSU_UNIT_KG
+            elif gcas == config.GCAS_HC_BASE:
+                msu = d.quantity / config.MSU_UNIT_KG
+            else:
+                msu = self.enricher.calculate_msu(d.quantity, variant.weight_per_container if variant else 0)
+
+            enriched_demands.append({
+                "demand": d,
+                "gcas": gcas,
+                "variant": variant,
+                "msu": msu
+            })
+
+        # Sort chronologically by packing start time
+        enriched_demands.sort(key=lambda x: x["demand"].pkg_start_dt)
+
+        # --- STEP 2: AGGREGATE BATCHES GLOBALLY BY GCAS ---
+        accumulating_demands = {}
+        merged_demands_info = []
+        max_12t_msu = 4.6  # Safe maximum physical capacity for a 12T system
+
+        for item in enriched_demands:
+            gcas = item["gcas"]
+            is_replenish = "Replenishment" in item["demand"].description
+
+            # Don't merge replenishments or unknown SKUs
+            if is_replenish or gcas == "UNKNOWN":
+                merged_demands_info.append(item)
+                continue
+
+            # If we are already tracking this GCAS, try to add to it
+            if gcas in accumulating_demands:
+                current = accumulating_demands[gcas]
+                combined_msu = current["msu"] + item["msu"]
+
+                if combined_msu <= max_12t_msu:
+                    # It fits! Merge them together.
+                    merged_demand = Demand(
+                        order_id=f"{current['demand'].order_id} + {item['demand'].order_id}",
+                        material_code=current["demand"].material_code,
+                        description=current["demand"].description,
+                        quantity=current["demand"].quantity + item["demand"].quantity,
+                        pkg_start_dt=min(current["demand"].pkg_start_dt, item["demand"].pkg_start_dt),
+                        pkg_end_dt=max(current["demand"].pkg_end_dt, item["demand"].pkg_end_dt),
+                        line="MIXED" if current["demand"].line != item["demand"].line else current["demand"].line
+                    )
+                    accumulating_demands[gcas] = {
+                        "demand": merged_demand,
+                        "gcas": gcas,
+                        "variant": current["variant"],
+                        "msu": combined_msu
+                    }
+                else:
+                    # It exceeds 12T capacity. Commit the old one and start a new pool.
+                    merged_demands_info.append(current)
+                    accumulating_demands[gcas] = item
+            else:
+                # Start tracking a new GCAS pool
+                accumulating_demands[gcas] = item
+
+        # Flush any remaining pools into the final list
+        for gcas, item in accumulating_demands.items():
+            merged_demands_info.append(item)
+
+        # Re-sort the final merged list chronologically by earliest pkg_start_dt
+        merged_demands_info.sort(key=lambda x: x["demand"].pkg_start_dt)
+
+        print(f"   > Aggregated into {len(merged_demands_info)} unique making batches.")
+
+        # --- STEP 3: ASSIGN TO PRODUCTION BATCHES ---
+        batch_id_counter = 1
+        self.batches = []
+
+        for info in merged_demands_info:
+            d = info["demand"]
+            gcas = info["gcas"]
+            variant = info["variant"]
 
             sku = self.enricher.master_data.get(gcas)
             system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK", 0.0))
@@ -164,8 +244,6 @@ class Scheduler:
             batch_id_counter += 1
 
         return self.batches
-
-
 # ---------------------------------------------------------
 # 3. TANK SCHEDULER (OPTIMIZATION)
 # ---------------------------------------------------------
@@ -186,13 +264,15 @@ class TankScheduler:
         if "6T" in next_batch.system: matrix_key = "MMT_6T"
 
         rules = self.washout_matrices.get(matrix_key, {})
-        key = (str(next_batch.sku_code).strip(), str(prev_batch.sku_code).strip())
+
+        # FIXED: Matrix in SQL is (source, target), so it must be (prev, next)
+        key = (str(prev_batch.sku_code).strip(), str(next_batch.sku_code).strip())
 
         if key in rules: return rules[key]
         return config.WASHOUT_DURATION
 
     def optimize(self, batches: List[ProductionBatch]) -> Tuple[List[ProductionBatch], List[dict]]:
-        print("--- Optimizing Tank Queue (Hidden Cooldown) ---")
+        print("--- Optimizing Tank Queue (Forward Continuous Packing) ---")
 
         tanks = {"Tank_12T": [], "Tank_6T": [], "Tank_1.25T": [], "Other": []}
         for b in batches:
@@ -210,48 +290,56 @@ class TankScheduler:
 
         for tank_name, tank_batches in tanks.items():
             if not tank_batches: continue
-            tank_batches.sort(key=lambda x: x.mkg_start_dt, reverse=True)
+
+            # 1. FORWARD SCHEDULING: Sort chronologically (earliest needed first)
+            tank_batches.sort(key=lambda x: x.mkg_start_dt)
 
             scheduled = []
             last_scheduled_batch = None
 
             for b in tank_batches:
                 if last_scheduled_batch is None:
+                    # The very first batch of the week stays at its ideal time
                     scheduled.append(b)
                     last_scheduled_batch = b
                 else:
-                    is_b_cond = self._is_conditioner(b)
-                    is_last_cond = self._is_conditioner(last_scheduled_batch)
+                    is_prev_cond = self._is_conditioner(last_scheduled_batch)
+                    is_curr_cond = self._is_conditioner(b)
 
                     wash_dur = 0
                     wash_type = None
 
-                    if is_b_cond:
+                    # If the PREVIOUS batch was a conditioner, we must run a post-wash
+                    if is_prev_cond:
                         wash_dur = config.COND_POST_WASH
                         wash_type = "COND_WASH"
                     else:
                         wash_dur = self._get_matrix_washout(last_scheduled_batch, b)
                         if wash_dur > 0: wash_type = "STD_WASH"
 
-                    required_gap_after_b = wash_dur
-                    if is_last_cond:
-                        required_gap_after_b += config.COND_COOLDOWN
+                    required_gap = wash_dur
+                    if is_curr_cond:
+                        required_gap += config.COND_COOLDOWN
 
-                    latest_end = last_scheduled_batch.mkg_start_dt - timedelta(minutes=required_gap_after_b)
+                    # The moment the previous batch + wash/cooldown finishes, we start the next one!
+                    earliest_start = last_scheduled_batch.mkg_end_dt + timedelta(minutes=required_gap)
 
-                    if b.mkg_end_dt > latest_end:
-                        new_end = latest_end
-                        new_start = new_end - timedelta(minutes=b.bct)
-                        b.mkg_end_dt = new_end
-                        b.mkg_start_dt = new_start
-                        b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
+                    # Snap the batch forward to run continuously
+                    new_start = earliest_start
+                    new_end = new_start + timedelta(minutes=b.bct)
+
+                    b.mkg_start_dt = new_start
+                    b.mkg_end_dt = new_end
+
+                    # Recalculate the buffer time (it will now be much higher for later batches!)
+                    b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
 
                     if wash_type:
                         desc = "COND WASH (60m)" if wash_type == "COND_WASH" else "WASHOUT"
                         washouts.append({
                             "System": b.system,
-                            "Start": b.mkg_end_dt,
-                            "End": b.mkg_end_dt + timedelta(minutes=wash_dur),
+                            "Start": last_scheduled_batch.mkg_end_dt,
+                            "End": last_scheduled_batch.mkg_end_dt + timedelta(minutes=wash_dur),
                             "Desc": desc
                         })
 

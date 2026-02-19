@@ -1,7 +1,8 @@
 import sys
 import os
+import time as perf_time  # Renamed to avoid collision with datetime.time
 import pandas as pd
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time as dt_time # Added alias
 
 # Setup Path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -10,7 +11,6 @@ if project_root not in sys.path: sys.path.insert(0, project_root)
 
 from src import config, db
 from src.data_loader import DataLoader
-# Ensure we import all necessary classes from logic
 from src.logic import PlanEnricher, Scheduler, TankScheduler, StorageAssigner
 from src.plan_exporter import upload_to_sql
 from src.update_rm_status import update_tank_status
@@ -19,9 +19,13 @@ from src.mrp import MaterialPlanner
 
 
 def get_shift_for_timestamp(dt: datetime) -> str:
+    """
+    Determines the shift (A, B, or C) based on the timestamp.
+    """
     t = dt.time()
-    if t >= time(7, 30) and t < time(15, 30): return "A"
-    if t >= time(15, 30) and t < time(23, 30): return "B"
+    # Use the 'dt_time' alias here to avoid the NameError
+    if t >= dt_time(7, 30) and t < dt_time(15, 30): return "A"
+    if t >= dt_time(15, 30) and t < dt_time(23, 30): return "B"
     return "C"
 
 
@@ -93,11 +97,14 @@ def generate_timeline_data(batches, washouts):
 
 
 def main():
+    start_perf = perf_time.time()
     print("=== AUTO PRODUCTION PLANNER (FINAL + TIMELINE) ===")
+    # Define the simulation target date
+    target_date = datetime(2026, 1, 7, 7, 30)
 
-    # 1. Update Sensors
+    # 1. Update Sensors (Time Travel Mode)
     try:
-        update_tank_status()
+        update_tank_status(target_dt=target_date)
     except:
         pass
 
@@ -108,7 +115,9 @@ def main():
         bulk_map = loader.load_bulk_variant_map()
         demands = loader.load_packing_plan()
         wo_matrices = loader.load_washout_matrices()
-        tank_snapshot = get_storage_tank_snapshot()
+
+        # Pass the date here too!
+        tank_snapshot = get_storage_tank_snapshot(target_dt=target_date)
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
         return
@@ -218,6 +227,15 @@ def main():
 
         upload_to_sql(final_batches, washouts)
 
+    end_perf = perf_time.time()  # Use the new alias
+    duration = end_perf - start_perf
 
+    minutes = int(duration // 60)
+    seconds = duration % 60
+
+    print("\n" + "=" * 40)
+    print(f"SIMULATION COMPLETE")
+    print(f"Total Runtime: {minutes}m {seconds:.2f}s")
+    print("=" * 40)
 if __name__ == "__main__":
     main()

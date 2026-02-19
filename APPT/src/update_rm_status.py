@@ -13,20 +13,16 @@ if project_root not in sys.path:
 def update_tank_status(target_dt=None):
     print("--- UPDATING RM TANK STATUS (OPTIMIZED) ---")
 
-    conn = db.get_connection()
-    if not conn: return
+    engine = db.get_engine()
+    if not engine:
+        print("   > [Error] Could not connect to database engine.")
+        return
 
     try:
-        cursor = conn.cursor()
-        engine = db.get_engine()
-
         latest_data = None
 
         if target_dt:
             # HISTORICAL MODE (Simulation)
-            # We must use the time column. We assume 'DateAndTime' exists.
-            # To avoid timeouts, we select only the necessary columns + time.
-            # But since columns are dynamic, we limit the row count drastically.
             query = "SELECT * FROM rm_data ORDER BY id DESC LIMIT 500"
             df_raw = pd.read_sql(query, engine)
 
@@ -47,9 +43,9 @@ def update_tank_status(target_dt=None):
 
         else:
             # LIVE MODE (Standard)
-            # FASTEST METHOD: Get Max ID first
-            cursor.execute("SELECT MAX(id) FROM rm_data")
-            max_id = cursor.fetchone()[0]
+            # Use Pandas via the engine directly instead of a raw cursor
+            df_max = pd.read_sql("SELECT MAX(id) as max_id FROM rm_data", engine)
+            max_id = df_max['max_id'].iloc[0] if not df_max.empty else None
 
             if max_id:
                 query = f"SELECT * FROM rm_data WHERE id = {max_id}"
@@ -59,7 +55,7 @@ def update_tank_status(target_dt=None):
                 print("[WARN] rm_data table is empty.")
                 return
 
-        # Update Status Table
+        # Fetch config using the engine
         df_config = pd.read_sql("SELECT tank_name, deadstock_value FROM rm_status_data", engine)
         updates = []
 
@@ -74,16 +70,19 @@ def update_tank_status(target_dt=None):
                 updates.append((current_val, new_status, tank_name))
 
         if updates:
-            stmt = "UPDATE rm_status_data SET current_value = %s, status = %s WHERE tank_name = %s"
-            cursor.executemany(stmt, updates)
-            conn.commit()
-            print(f"   > Successfully updated {len(updates)} tanks.")
+            # OPEN RAW CONNECTION ONLY WHEN READY TO UPDATE
+            conn = db.get_connection()
+            if conn:
+                cursor = conn.cursor()
+                stmt = "UPDATE rm_status_data SET current_value = %s, status = %s WHERE tank_name = %s"
+                cursor.executemany(stmt, updates)
+                conn.commit()
+                print(f"   > Successfully updated {len(updates)} tanks.")
+                cursor.close()
+                conn.close()
 
     except Exception as e:
         print(f"   > [Error] Failed to update RM status: {e}")
-    finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
 
 
 if __name__ == "__main__":
