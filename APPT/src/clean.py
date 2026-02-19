@@ -10,7 +10,32 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from src import config
+import pandas as pd
+from datetime import datetime, timedelta
 
+
+def clean_tts_data(input_path, output_path):
+    print(f"Reading TTS Data from {input_path}...")
+    df = pd.read_csv(input_path)  # or pd.read_excel if loading the raw .xls
+
+    def excel_to_datetime(serial):
+        if pd.isna(serial) or serial == '': return None
+        try:
+            val_float = float(serial)
+            # Excel base date is Dec 30, 1899
+            return (datetime(1899, 12, 30) + timedelta(days=val_float)).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            return serial  # If it's already a valid date string, leave it alone
+
+    # Apply the fix exclusively to the DateAndTime column
+    df['DateAndTime'] = df['DateAndTime'].apply(excel_to_datetime)
+
+    df.to_csv(output_path, index=False)
+    print(f"Success! Cleaned TTS data saved to: {output_path}")
+
+
+# Example usage:
+# clean_tts_data("data/input/TTS Raw Data.xls - Sheet1.csv", "data/input/TTS_Raw_Data_Cleaned.csv")
 
 def excel_to_datetime(serial):
     """Converts Excel serial date (float) to String YYYY-MM-DD HH:MM:SS"""

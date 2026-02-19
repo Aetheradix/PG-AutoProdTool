@@ -51,27 +51,17 @@ class PlanEnricher:
 
         # 1. Climbazole Premix (GCAS 91879323)
         if demand.material_code == config.GCAS_CLIMBAZOLE or any(k in desc_lower for k in config.RULE_CLIMBAZOLE):
-            # FIXED: 1200kg batch size
-            # 1200kg / 2571 (kg/MSU) = ~0.466 MSU
             msu_size = 1200.0 / config.MSU_UNIT_KG
             return ("1.25T", 180, msu_size)
 
         # 2. HC Base (GCAS 95619314)
         if demand.material_code == config.GCAS_HC_BASE or any(k in desc_lower for k in config.RULE_HC_BASE):
-            # Check quantity needed. If small deficit (< 2900kg), use 6T. Else use 12T.
             needed_kg = demand.quantity
-
-            # Default to 12T if needed quantity is high or unspecified (0)
             target = "12T"
             if needed_kg > 0 and needed_kg <= 2900:
                 target = "6T"
 
-            # Set fixed batch sizes
-            if target == "12T":
-                batch_kg = 5900.0
-            else:
-                batch_kg = 2900.0
-
+            batch_kg = 5900.0 if target == "12T" else 2900.0
             msu_size = batch_kg / config.MSU_UNIT_KG
             return (target, self._get_bct(sku, target), msu_size)
 
@@ -126,7 +116,7 @@ class Scheduler:
     def run_initial_schedule(self, demands: List[Demand]) -> List[ProductionBatch]:
         print(f"--- Calculating Initial Schedule ({len(demands)} demands) ---")
         batch_id_counter = 1
-        self.batches = []  # Reset
+        self.batches = []
 
         for d in demands:
             variant = self.enricher.find_variant_for_demand(d)
@@ -278,26 +268,39 @@ class TankScheduler:
 class StorageAssigner:
     def __init__(self, tank_snapshot: pd.DataFrame):
         self.tanks = {}
+
+        # Define allowed tanks specifically requested
+        self.portable_tanks = [f"TK#_{i}_#" for i in range(1, 29)]
+        self.ronchi_tanks = ["TK#_51_#", "TK#_52_#", "TK#_53_#"]
+        self.allowed_tanks = self.portable_tanks + self.ronchi_tanks
+
         if not tank_snapshot.empty:
             for _, row in tank_snapshot.iterrows():
                 tid = row['tank_id']
-                is_usable = False
 
+                # Filter out any tank not in the allowed list
+                if tid not in self.allowed_tanks:
+                    continue
+
+                is_usable = False
                 code = int(row['color_code']) if pd.notna(row['color_code']) else 0
                 gcas = str(row['current_gcas']).strip()
 
                 if code in [1, 7, 14]:
                     is_usable = True
 
+                tank_type = "RONCHI" if tid in self.ronchi_tanks else "PORTABLE"
+
                 self.tanks[tid] = {
-                    "available_at": datetime.min,
+                    "available_at": datetime(2000, 1, 1),  # Safe historical date to prevent overflow
                     "status_code": code,
                     "current_gcas": gcas,
-                    "is_usable": is_usable
+                    "is_usable": is_usable,
+                    "type": tank_type
                 }
 
     def assign_tanks(self, batches: List[ProductionBatch]):
-        print("--- Assigning Storage Tanks ---")
+        print("--- Assigning Storage Tanks (Unified Pool) ---")
         batches.sort(key=lambda x: x.mkg_end_dt)
 
         for b in batches:
@@ -309,6 +312,7 @@ class StorageAssigner:
 
             for tid, state in self.tanks.items():
                 if not state["is_usable"]: continue
+                # REMOVED the system size constraint! Any batch can go to any tank.
                 if state["available_at"] > needed_start: continue
 
                 score = -1
@@ -327,16 +331,19 @@ class StorageAssigner:
                     score = 4
 
                 if score > 0:
-                    candidates.append((score, tid))
+                    # Calculate idle time to tie-break (minimize time tank sits empty)
+                    idle_time = (needed_start - state["available_at"]).total_seconds()
+                    candidates.append((score, idle_time, tid))
 
-            candidates.sort(key=lambda x: x[0])
+            # Sort by Score (primary), then by Idle Time ascending (secondary)
+            candidates.sort(key=lambda x: (x[0], x[1]))
 
             if candidates:
-                best_tank = candidates[0][1]
+                best_tank = candidates[0][2]
                 b.storage_tank = best_tank
 
                 self.tanks[best_tank]["available_at"] = needed_end
                 self.tanks[best_tank]["current_gcas"] = gcas
                 self.tanks[best_tank]["status_code"] = 7
             else:
-                b.storage_tank = "NO_TANK"
+                b.storage_tank = "NO_TANK_AVAILABLE"

@@ -26,7 +26,7 @@ class MaterialPlanner:
             print(f"[MRP Error] Could not load inventory: {e}")
 
     def check_plan_and_replenish(self, batches: List[ProductionBatch]) -> List[Demand]:
-        print("--- Running MRP Simulation (Replenishment Mode) ---")
+        print("--- Running MRP Simulation (JIT Replenishment Mode) ---")
 
         events = []
         for b in batches:
@@ -53,7 +53,7 @@ class MaterialPlanner:
             elif evt["type"] == "CONSUME":
                 sku = self.sku_master.get(b.sku_code)
                 if not sku:
-                    b.mrp_status = "UNKNOWN_SKU"
+                    if b.mrp_status == "OK": b.mrp_status = "UNKNOWN_SKU"
                     continue
 
                 sys_prefix = "6t" if "6T" in b.system else "12t"
@@ -76,10 +76,9 @@ class MaterialPlanner:
                             if ing_name == "hc_base":
                                 can_replenish = True
                                 rep_gcas = config.GCAS_HC_BASE
-                                rep_desc = "Auto-Replenishment HC Base"
-                                # UPDATED LOGIC: Prefer 5900kg (12T) to avoid many small batches
-                                # Only use 6T (2900kg) if the deficit is very small (< 1000kg)
-                                qty_to_order = 5900.0 if deficit > 1000 else 2900.0
+                                rep_desc = "Auto-Replenishment HC Base (12T)"
+                                # Enforce 5900kg batch JIT
+                                qty_to_order = 5900.0
 
                             elif ing_name == "climbazole":
                                 can_replenish = True
@@ -88,7 +87,8 @@ class MaterialPlanner:
                                 qty_to_order = 1200.0
 
                             if can_replenish:
-                                needed_time = b.mkg_start_dt
+                                # Schedule it right before it's needed
+                                needed_time = b.mkg_start_dt - timedelta(minutes=30)
                                 new_demand = Demand(
                                     order_id=f"AUTO_{len(replenish_orders) + 1}",
                                     material_code=rep_gcas,
@@ -100,12 +100,13 @@ class MaterialPlanner:
                                 )
                                 replenish_orders.append(new_demand)
 
-                                # IMMEDIATE CREDIT
+                                # Credit the simulated inventory immediately to prevent duplicate orders
                                 sim_inv[ing_name] += qty_to_order
-                                print(f"   [!] Shortage of {ing_name} (-{deficit:.0f}kg). Queueing {qty_to_order}kg.")
+                                print(f"   [!] JIT Shortage of {ing_name} (needs {deficit:.0f}kg). Queueing {qty_to_order}kg at {needed_time.strftime('%Y-%m-%d %H:%M')}.")
                                 b.mrp_status = f"REPLENISHED: {ing_name.upper()}"
                             else:
-                                b.mrp_status = f"LOW: {ing_name.upper()}"
+                                if b.mrp_status == "OK":
+                                    b.mrp_status = f"LOW: {ing_name.upper()}"
 
                         sim_inv[ing_name] -= required_qty
 

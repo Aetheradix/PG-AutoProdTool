@@ -34,28 +34,27 @@ def get_storage_tank_snapshot(target_dt=None):
     if not engine: return pd.DataFrame()
 
     try:
-        # Fetch data using SQLAlchemy (No UserWarning)
-        # We quote the weird column name
-        query_raw = 'SELECT Tagname, GCAS, BATCH_NO, COLOR, "DT#_10_#" FROM tts_raw_data'
+        # UPDATED: Pull DateAndTime instead of DT#_10_#
+        query_raw = 'SELECT Tagname, GCAS, BATCH_NO, COLOR, DateAndTime FROM tts_raw_data'
 
         try:
             df_raw = pd.read_sql(query_raw, engine)
         except Exception:
-            # Fallback if quoting fails
+            # Fallback
             df_raw = pd.read_sql("SELECT * FROM tts_raw_data", engine)
 
         if df_raw.empty: return pd.DataFrame()
 
-        # Rename column
-        col_name = 'DT#_10_#'
+        # UPDATED: Find DateAndTime dynamically in case of case-sensitivity issues
+        col_name = 'DateAndTime'
         if col_name not in df_raw.columns:
-            # Try finding it regardless of case/symbols
             for c in df_raw.columns:
-                if "DT" in c and "10" in c:
+                if c.lower() == 'dateandtime':
                     col_name = c
                     break
 
         if col_name in df_raw.columns:
+            # Rename it to status_date so the rest of your script works perfectly
             df_raw.rename(columns={col_name: 'status_date'}, inplace=True)
 
             # Apply Custom Parsing
@@ -66,7 +65,7 @@ def get_storage_tank_snapshot(target_dt=None):
             if mask_na.any():
                 df_raw.loc[mask_na, 'dt_obj'] = pd.to_datetime(df_raw.loc[mask_na, 'status_date'], errors='coerce')
         else:
-            print("[WARN] Date column not found in tts_raw_data. Using NOW.")
+            print("[WARN] DateAndTime column not found in tts_raw_data. Using NOW.")
             df_raw['dt_obj'] = datetime.now()
 
         # FILTER: Time Travel Logic
