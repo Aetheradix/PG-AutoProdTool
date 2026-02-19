@@ -100,7 +100,7 @@ def main():
     start_perf = perf_time.time()
     print("=== AUTO PRODUCTION PLANNER (FINAL + TIMELINE) ===")
     # Define the simulation target date
-    target_date = datetime(2026, 1, 7, 7, 30)
+    target_date = datetime(2026, 1, 10, 7, 30)
 
     # 1. Update Sensors (Time Travel Mode)
     try:
