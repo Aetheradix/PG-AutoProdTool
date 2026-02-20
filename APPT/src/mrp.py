@@ -26,7 +26,7 @@ class MaterialPlanner:
             print(f"[MRP Error] Could not load inventory: {e}")
 
     def check_plan_and_replenish(self, batches: List[ProductionBatch]) -> List[Demand]:
-        print("--- Running MRP Simulation (JIT Replenishment Mode) ---")
+        print("--- Running MRP Simulation (JIT Replenishment Mode + Capacity Limits) ---")
 
         events = []
         for b in batches:
@@ -45,10 +45,20 @@ class MaterialPlanner:
 
             if evt["type"] == "PRODUCE":
                 produced_qty_kg = b.total_msu * config.MSU_UNIT_KG
+
                 if b.sku_code == config.GCAS_CLIMBAZOLE or "climbazole" in desc_lower:
                     sim_inv["climbazole"] += produced_qty_kg
+                    # Capacity Alert Logic
+                    if sim_inv["climbazole"] > 3000.0:
+                        warn_msg = "WARN: MAX CAP (3T) EXCEEDED"
+                        b.mrp_status = warn_msg if b.mrp_status == "OK" else f"{b.mrp_status} | {warn_msg}"
+
                 elif b.sku_code == config.GCAS_HC_BASE or "hc base" in desc_lower:
                     sim_inv["hc_base"] += produced_qty_kg
+                    # Capacity Alert Logic
+                    if sim_inv["hc_base"] > 12000.0:
+                        warn_msg = "WARN: MAX CAP (12T) EXCEEDED"
+                        b.mrp_status = warn_msg if b.mrp_status == "OK" else f"{b.mrp_status} | {warn_msg}"
 
             elif evt["type"] == "CONSUME":
                 sku = self.sku_master.get(b.sku_code)
@@ -77,17 +87,21 @@ class MaterialPlanner:
                                 can_replenish = True
                                 rep_gcas = config.GCAS_HC_BASE
                                 rep_desc = "Auto-Replenishment HC Base (12T)"
-                                # Enforce 5900kg batch JIT
                                 qty_to_order = 5900.0
+                                # Dynamic Safety Clamp to strictly prevent overflow above 12T (12000kg)
+                                if current + qty_to_order > 12000.0:
+                                    qty_to_order = max(0.0, 12000.0 - current)
 
                             elif ing_name == "climbazole":
                                 can_replenish = True
                                 rep_gcas = config.GCAS_CLIMBAZOLE
                                 rep_desc = "Auto-Replenishment Climbazole"
                                 qty_to_order = 1200.0
+                                # Dynamic Safety Clamp to strictly prevent overflow above 3T (3000kg)
+                                if current + qty_to_order > 3000.0:
+                                    qty_to_order = max(0.0, 3000.0 - current)
 
-                            if can_replenish:
-                                # Schedule it right before it's needed
+                            if can_replenish and qty_to_order > 0:
                                 needed_time = b.mkg_start_dt - timedelta(minutes=30)
                                 new_demand = Demand(
                                     order_id=f"AUTO_{len(replenish_orders) + 1}",
@@ -100,9 +114,9 @@ class MaterialPlanner:
                                 )
                                 replenish_orders.append(new_demand)
 
-                                # Credit the simulated inventory immediately to prevent duplicate orders
                                 sim_inv[ing_name] += qty_to_order
-                                print(f"   [!] JIT Shortage of {ing_name} (needs {deficit:.0f}kg). Queueing {qty_to_order}kg at {needed_time.strftime('%Y-%m-%d %H:%M')}.")
+                                print(
+                                    f"   [!] JIT Shortage of {ing_name} (needs {deficit:.0f}kg). Queueing {qty_to_order:.0f}kg at {needed_time.strftime('%Y-%m-%d %H:%M')}.")
                                 b.mrp_status = f"REPLENISHED: {ing_name.upper()}"
                             else:
                                 if b.mrp_status == "OK":

@@ -448,7 +448,7 @@ class TankScheduler:
 
 
 # ---------------------------------------------------------
-# 4. STORAGE ASSIGNER (ZONING & PENALTY ROUTING)
+# 4. STORAGE ASSIGNER (FAST-RELEASE + UNIVERSAL CIP + DEDICATED TANKS)
 # ---------------------------------------------------------
 class StorageAssigner:
     def __init__(self, tank_snapshot: pd.DataFrame, pst_wo_matrix: dict = None):
@@ -471,12 +471,12 @@ class StorageAssigner:
                     "available_at": datetime(2000, 1, 1),
                     "status_code": code,
                     "current_gcas": gcas,
-                    "is_usable": True,  # UNLOCKED: All 28 tanks are physically routable
+                    "is_usable": True,
                     "type": tank_type
                 }
 
     def assign_tanks(self, batches: List[ProductionBatch]):
-        print("--- Assigning Storage Tanks (Zoning + Dynamic Washout Labels) ---")
+        print("--- Assigning Storage Tanks (Pkg Start Release + Dedicated Tanks) ---")
         batches.sort(key=lambda x: x.mkg_end_dt)
 
         cond_pref_tanks = ["TK#_25_#", "TK#_26_#", "TK#_27_#", "TK#_28_#"]
@@ -484,10 +484,18 @@ class StorageAssigner:
 
         for b in batches:
             needed_start = b.mkg_end_dt
-            needed_end = b.pkg_end_dt
+            tank_freed_at = b.pkg_start_dt
             gcas = str(b.sku_code).strip()
-            is_12t = "12T" in b.system
 
+            # --- 1. DEDICATED TANK ROUTING FOR INTERMEDIATES ---
+            if gcas == config.GCAS_HC_BASE:
+                b.storage_tank = "HC Base Tank"
+                continue
+            elif gcas == config.GCAS_CLIMBAZOLE:
+                b.storage_tank = "Climbazole Tank"
+                continue
+
+            is_12t = "12T" in b.system
             is_cond = any(kw in b.desc.lower() for kw in config.RULE_CONDITIONER)
             is_int2 = (b.line == "INT2")
 
@@ -501,7 +509,6 @@ class StorageAssigner:
                 is_clean = (state["status_code"] == 1)
                 wash_time = 0
 
-                # Determine wash time from pst_wo_matrix
                 if is_clean:
                     wash_time = 0
                 elif tank_gcas == gcas:
@@ -510,9 +517,10 @@ class StorageAssigner:
                     wash_time = self.pst_wo_matrix.get((tank_gcas, gcas), 20)
 
                 ready_at = state["available_at"] + timedelta(minutes=wash_time)
-                if ready_at > needed_start: continue
 
-                # Base Availability Score
+                if ready_at > needed_start:
+                    continue
+
                 score = 0
                 if wash_time == 0 and tank_gcas == gcas:
                     score = 1
@@ -521,7 +529,6 @@ class StorageAssigner:
                 else:
                     score = 3
 
-                # Penalty Routing Logic
                 penalty = 0
                 if is_cond:
                     if tid in cond_pref_tanks:
@@ -583,21 +590,18 @@ class StorageAssigner:
                 if portable_candidates:
                     assigned_tanks.append((portable_candidates[0][2], portable_candidates[0][3]))
 
-            # Commit assignments and format string
             if assigned_tanks:
                 tank_labels = []
                 for tank_id, w_time in assigned_tanks:
-                    # Append visual wash tag for Excel!
                     label = f"{tank_id} [Wash {w_time}m]" if w_time > 0 else tank_id
                     tank_labels.append(label)
 
-                    self.tanks[tank_id]["available_at"] = needed_end
+                    self.tanks[tank_id]["available_at"] = tank_freed_at
                     self.tanks[tank_id]["current_gcas"] = gcas
                     self.tanks[tank_id]["status_code"] = 7
 
                 b.storage_tank = " + ".join(tank_labels)
 
-                # Check for the non-standard conditioner warning
                 if is_cond and any(tk_id in cond_fallback_tanks for tk_id, _ in assigned_tanks):
                     warning = "WARN: Non-standard Cond tank"
                     b.mrp_status = warning if not b.mrp_status or b.mrp_status == "OK" else f"{b.mrp_status} | {warning}"
