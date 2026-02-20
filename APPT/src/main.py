@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import time as perf_time
 import pandas as pd
 from datetime import datetime, timedelta, time as dt_time
@@ -29,64 +30,138 @@ def get_shift_for_timestamp(dt: datetime) -> str:
     return "C"
 
 
-def generate_timeline_data(batches, washouts):
+def generate_system_timeline_data(batches, washouts):
     """
-    Transforms the batch and washout data into a flat, 30-minute interval
-    timeline for the Gantt chart export.
+    Generates a 30-minute interval Gantt chart view of the MIXING SYSTEMS.
     """
-    if not batches: return []
+    if not batches and not washouts: return pd.DataFrame()
 
-    start_time = min(b.mkg_start_dt for b in batches)
-    end_time = max(b.mkg_end_dt for b in batches)
+    starts = [b.mkg_start_dt for b in batches] + [w['Start'] for w in washouts]
+    ends = [b.mkg_end_dt for b in batches] + [w['End'] for w in washouts]
 
-    # Floor to nearest 30 mins
-    start_time = start_time.replace(minute=(start_time.minute // 30) * 30, second=0, microsecond=0)
+    if not starts: return pd.DataFrame()
+
+    min_time = min(starts).replace(minute=0, second=0, microsecond=0)
+    max_time = max(ends).replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
 
     timeline = []
-    curr = start_time
-    while curr <= end_time:
+    curr = min_time
+
+    while curr <= max_time:
         row = {
             "Time": curr.strftime("%Y-%m-%d %H:%M"),
-            "Shift": get_shift_for_timestamp(curr),
-            "12T": "",
-            "6T": "",
-            "1.25T": ""
+            "Shift": get_shift_for_timestamp(curr)
         }
+        for col in ["12T", "6T", "1.25T"]:
+            row[col] = ""
 
-        # Check Batches
         for b in batches:
             if b.mkg_start_dt <= curr < b.mkg_end_dt:
-                sys_col = "12T" if "12T" in b.system else "6T" if "6T" in b.system else "1.25T"
-                row[sys_col] = f"{b.id}: {b.desc}"
+                col = "12T" if "12T" in b.system else "6T" if "6T" in b.system else "1.25T"
+                row[col] = f"{b.id}: {b.desc}"
 
-        # Check Washouts
         for w in washouts:
             if w["Start"] <= curr < w["End"]:
-                sys_col = "12T" if "12T" in w["System"] else "6T" if "6T" in w["System"] else "1.25T"
-                row[sys_col] = w["Desc"]
+                col = "12T" if "12T" in w['System'] else "6T" if "6T" in w['System'] else "1.25T"
+                if row[col]:
+                    row[col] += f" | {w['Desc']}"
+                else:
+                    row[col] = w['Desc']
 
         timeline.append(row)
         curr += timedelta(minutes=30)
 
-    return timeline
+    return pd.DataFrame(timeline)
+
+
+def generate_tank_storage_timeline(batches):
+    """
+    Generates a 30-minute interval Gantt chart view of the STORAGE TANKS + CIP Washouts.
+    """
+    tank_assignments = []
+    unique_tanks = set()
+
+    for b in batches:
+        if not b.storage_tank or b.storage_tank == "NO_TANK_AVAILABLE": continue
+        parts = b.storage_tank.split(" + ")
+
+        for p in parts:
+            # Extract Tank ID
+            t_match = re.search(r"(TK#_\d+_#)", p)
+            if t_match:
+                t_id = t_match.group(1)
+
+                # Extract Wash Time if it exists
+                w_match = re.search(r"\[Wash (\d+)m\]", p)
+                w_time = int(w_match.group(1)) if w_match else 0
+
+                unique_tanks.add(t_id)
+                tank_assignments.append({
+                    'tank': t_id,
+                    'wash_start': b.mkg_end_dt - timedelta(minutes=w_time) if w_time > 0 else None,
+                    'fill_start': b.mkg_end_dt,
+                    'pack_end': b.pkg_end_dt,
+                    'label': f"{b.id}: {b.desc}",
+                    'wash_label': f"WASHOUT ({w_time}m)"
+                })
+
+    if not tank_assignments: return pd.DataFrame()
+
+    # Sort columns naturally (TK_1 to TK_53)
+    def tank_sort_key(t):
+        num = re.search(r"\d+", t)
+        return int(num.group(0)) if num else 999
+
+    sorted_tanks = sorted(list(unique_tanks), key=tank_sort_key)
+
+    # Determine the time boundary based on tank usage
+    min_times = [ta['wash_start'] if ta['wash_start'] else ta['fill_start'] for ta in tank_assignments]
+    max_times = [ta['pack_end'] for ta in tank_assignments]
+
+    start_time = min(min_times).replace(minute=0, second=0, microsecond=0)
+    end_time = max(max_times).replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
+
+    timeline = []
+    curr = start_time
+
+    while curr <= end_time:
+        row = {"Time": curr.strftime("%Y-%m-%d %H:%M"), "Shift": get_shift_for_timestamp(curr)}
+        for t in sorted_tanks:
+            row[t] = ""
+
+        for ta in tank_assignments:
+            # Mark Washout Time
+            if ta['wash_start'] and ta['wash_start'] <= curr < ta['fill_start']:
+                if row[ta['tank']]:
+                    row[ta['tank']] += " | " + ta['wash_label']
+                else:
+                    row[ta['tank']] = ta['wash_label']
+            # Mark Holding/Packing Time
+            elif ta['fill_start'] <= curr < ta['pack_end']:
+                if row[ta['tank']]:
+                    row[ta['tank']] += " | " + ta['label']
+                else:
+                    row[ta['tank']] = ta['label']
+
+        timeline.append(row)
+        curr += timedelta(minutes=30)
+
+    return pd.DataFrame(timeline)
 
 
 def main():
     start_perf = perf_time.time()
     print("=== AUTO PRODUCTION PLANNER (FINAL + TIMELINE) ===")
 
-    # ---------------------------------------------------------
-    # 0. TARGET DATE SETUP
-    # ---------------------------------------------------------
     target_date = datetime(2026, 1, 10, 7, 30)
 
-    # 1. Update RM Sensors
+    # 1. Update Sensors
     try:
         update_tank_status(target_dt=target_date)
-    except Exception as e:
-        print(f"Sensor update failed: {e}")
+    except:
+        pass
 
-    # 2. Load Core Data
+    # 2. Load Data
     loader = DataLoader(os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE), "dummy")
     try:
         master_data = loader.load_master_data()
@@ -95,156 +170,118 @@ def main():
         wo_matrices = loader.load_washout_matrices()
         tank_snapshot = get_storage_tank_snapshot(target_dt=target_date)
 
-        # --- LOAD PST WASHOUT MATRIX (20 MIN CIP) ---
+        # Load Washout Matrix
         pst_wo_matrix = {}
         try:
             query = "SELECT source_gcas, target_gcas, washout_type FROM pst_wo_matrix"
             df_pst = pd.read_sql(query, db.get_engine())
-
-            type_map = {
-                "WASH": 20,
-                "RINSE": 20,
-                "NONE": 0
-            }
-
+            type_map = {"WASH": 20, "RINSE": 20, "NONE": 0}
             for _, row in df_pst.iterrows():
-                src = str(row['source_gcas']).strip()
-                tgt = str(row['target_gcas']).strip()
-                w_type = str(row['washout_type']).strip().upper()
-
-                minutes = type_map.get(w_type, 20)
-                pst_wo_matrix[(src, tgt)] = minutes
-
-            print(f"Loaded {len(pst_wo_matrix)} storage tank washout rules.")
+                pst_wo_matrix[(str(row['source_gcas']).strip(), str(row['target_gcas']).strip())] = type_map.get(
+                    str(row['washout_type']).strip().upper(), 20)
         except Exception as e:
-            print(f"   > [WARN] Could not load pst_wo_matrix: {e}")
+            pass
 
     except Exception as e:
-        print(f"Data loading failed: {e}")
+        print(f"CRITICAL ERROR: {e}")
         return
 
-    # Initialize Business Logic Modules
     enricher = PlanEnricher(master_data, bulk_map)
     scheduler = Scheduler(enricher)
-    tank_scheduler = TankScheduler(wo_matrices)
+    tank_opt = TankScheduler(wo_matrices)
+    mrp_planner = MaterialPlanner(master_data)
 
-    print("\n--- Loading Inventory for MRP ---")
-    mrp = MaterialPlanner(master_data)
+    # --- PLANNING LOOP ---
+    final_batches = []
+    washouts = []
+    storage_assigner = None
 
-    # ---------------------------------------------------------
-    # ITERATION 1: Base Packing Plan
-    # ---------------------------------------------------------
-    print(f"\n--- Iteration 1: Scheduling {len(demands)} orders ---")
-    batches_iter1 = scheduler.run_initial_schedule(demands)
-    final_batches, washouts = tank_scheduler.optimize(batches_iter1)
+    for i in range(3):
+        print(f"\n--- Iteration {i + 1}: Scheduling {len(demands)} orders ---")
+        raw_batches = scheduler.run_initial_schedule(demands)
+        cur_batches, cur_washouts = tank_opt.optimize(raw_batches)
 
-    assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
-    assigner.assign_tanks(final_batches)
+        storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
+        storage_assigner.assign_tanks(cur_batches)
 
-    replenishment_orders = mrp.check_plan_and_replenish(final_batches)
+        new_orders = mrp_planner.check_plan_and_replenish(cur_batches)
 
-    # ---------------------------------------------------------
-    # ITERATION 2: Adding MRP Auto-Replenishments
-    # ---------------------------------------------------------
-    if replenishment_orders:
-        print(f"   > MRP generated {len(replenishment_orders)} replenishment orders. Re-planning...\n")
-        all_demands = demands + replenishment_orders
+        if new_orders:
+            print(f"   > MRP generated {len(new_orders)} replenishment orders. Re-planning...")
+            demands.extend(new_orders)
+        else:
+            print("   > Plan is stable. No new replenishment needed.")
+            final_batches = cur_batches
+            washouts = cur_washouts
+            break
 
-        print(f"--- Iteration 2: Scheduling {len(all_demands)} orders ---")
-        batches_iter2 = scheduler.run_initial_schedule(all_demands)
-        final_batches, washouts = tank_scheduler.optimize(batches_iter2)
-
-        assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
-        assigner.assign_tanks(final_batches)
-
-        mrp.check_plan_and_replenish(final_batches)
-    else:
-        print("   > Plan is stable. No new replenishment needed.")
-
-    # ---------------------------------------------------------
-    # FINAL PREPARATION & EXPORT
-    # ---------------------------------------------------------
+    # --- FINAL SORTING & EXPORT ---
     print(f"\nFinal Plan: {len(final_batches)} Batches.")
 
-    # Cosmetic Bug Fix: Re-sync text shift labels
-    for b in final_batches:
-        b.shift = get_shift_for_timestamp(b.mkg_start_dt)
+    if final_batches:
+        for b in final_batches: b.shift = get_shift_for_timestamp(b.mkg_start_dt)
 
-    # --- BULLETPROOF SORTING LOGIC ---
-    def sort_key(b):
-        sys_str = str(b.system).upper()
-        if "12T" in sys_str:
-            sys_priority = 1
-        elif "6T" in sys_str:
-            sys_priority = 2
-        elif "1.25T" in sys_str:
-            sys_priority = 3
-        else:
-            sys_priority = 4
-        return (sys_priority, b.mkg_start_dt)
+        # Sort Logic: 12T -> 6T -> 1.25T
+        def sort_key(b):
+            sys_str = str(b.system).upper()
+            return (1 if "12T" in sys_str else 2 if "6T" in sys_str else 3, b.mkg_start_dt)
 
-    final_batches.sort(key=sort_key)
-    # ---------------------------------
+        final_batches.sort(key=sort_key)
 
-    # Reconstruct the DataFrame to match your original column headers exactly
-    data = []
-    for b in final_batches:
-        data.append({
-            "Production Line": b.line,
-            "Order": b.linked_order,
-            "Material": b.material,
-            "Description": b.desc,
-            "Batch ID": b.id,
-            "GCAS": b.sku_code,
-            "System": b.system,
-            "Total MSU": round(b.total_msu, 4),
-            "Tech Type": b.tech_type,
-            "Shift": b.shift,
-            "Mkg Start Time": b.mkg_start_dt,
-            "BCT (min)": b.bct,
-            "Mkg End Time": b.mkg_end_dt,
-            "Buffer (min)": b.buffer_min,
-            "Storage Tank": b.storage_tank,
-            "Pkg Start Time": b.pkg_start_dt,
-            "Pkg End Time": b.pkg_end_dt,
-            "MRP Status": b.mrp_status
-        })
+        data = []
+        for b in final_batches:
+            data.append({
+                "Production Line": b.line, "Order": b.linked_order, "Material": b.material,
+                "Description": b.desc, "Batch ID": b.id, "GCAS": b.sku_code,
+                "System": b.system, "Total MSU": round(b.total_msu, 4), "Tech Type": b.tech_type,
+                "Shift": b.shift, "Mkg Start Time": b.mkg_start_dt, "BCT (min)": b.bct,
+                "Mkg End Time": b.mkg_end_dt, "Buffer (min)": b.buffer_min, "Storage Tank": b.storage_tank,
+                "Pkg Start Time": b.pkg_start_dt, "Pkg End Time": b.pkg_end_dt, "MRP Status": b.mrp_status
+            })
 
-    df_schedule = pd.DataFrame(data)
+        df_main = pd.DataFrame(data)
 
-    # Generate GANTT Timeline
-    timeline_events = generate_timeline_data(final_batches, washouts)
-    df_timeline = pd.DataFrame(timeline_events)
+        # GENERATE BOTH TIMELINES
+        df_sys_timeline = generate_system_timeline_data(final_batches, washouts)
+        df_tank_timeline = generate_tank_storage_timeline(final_batches)
 
-    # Excel Output
-    output_path = os.path.join(config.OUTPUT_DIR, "Final_Production_Plan.xlsx")
-    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+        out_path = os.path.join(config.OUTPUT_DIR, "Final_Production_Plan.xlsx")
 
-    with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
-        df_schedule.to_excel(writer, sheet_name="Schedule", index=False)
-        if not df_timeline.empty:
-            df_timeline.to_excel(writer, sheet_name="Tank Timeline", index=False)
+        with pd.ExcelWriter(out_path, engine='xlsxwriter') as writer:
+            df_main.to_excel(writer, sheet_name="Schedule", index=False)
 
-        workbook = writer.book
-        worksheet = writer.sheets['Schedule']
-        worksheet.set_column('A:R', 15)
+            if not df_sys_timeline.empty:
+                df_sys_timeline.to_excel(writer, sheet_name="System Timeline", index=False)
 
-    print(f"Saved to: {output_path}")
+            if not df_tank_timeline.empty:
+                df_tank_timeline.to_excel(writer, sheet_name="Storage Tank Timeline", index=False)
 
-    # SQL Output (Updated to send washouts correctly to prevent crash)
-    upload_to_sql(final_batches, washouts)
+            # Excel Formatting
+            workbook = writer.book
+            fmt_wrap = workbook.add_format({'text_wrap': True, 'valign': 'top'})
 
-    # ---------------------------------------------------------
-    # RUNTIME TRACKING
-    # ---------------------------------------------------------
+            writer.sheets["Schedule"].set_column(0, 20, 15)
+
+            if "System Timeline" in writer.sheets:
+                ws_sys = writer.sheets["System Timeline"]
+                ws_sys.set_column(0, 0, 18)
+                ws_sys.set_column(1, 1, 8)
+                ws_sys.set_column(2, 4, 40, fmt_wrap)
+
+            if "Storage Tank Timeline" in writer.sheets:
+                ws_tank = writer.sheets["Storage Tank Timeline"]
+                ws_tank.set_column(0, 0, 18)
+                ws_tank.set_column(1, 1, 8)
+                ws_tank.set_column(2, len(df_tank_timeline.columns) - 1, 25, fmt_wrap)
+
+        print(f"Saved to: {out_path}")
+        upload_to_sql(final_batches, washouts)
+
     end_perf = perf_time.time()
     duration = end_perf - start_perf
-    minutes = int(duration // 60)
-    seconds = duration % 60
-
     print("\n" + "=" * 40)
-    print("SIMULATION COMPLETE")
-    print(f"Total Runtime: {minutes}m {seconds:.2f}s")
+    print(f"SIMULATION COMPLETE")
+    print(f"Total Runtime: {int(duration // 60)}m {duration % 60:.2f}s")
     print("=" * 40)
 
 
