@@ -29,59 +29,61 @@ class PlanEnricher:
 
     def find_variant_for_demand(self, demand: Demand) -> Optional[VariantInfo]:
         if demand.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
-            return VariantInfo(gcas=demand.material_code, weight_per_container=0)
+            return None
 
-        original_desc = demand.description.strip()
-        if original_desc in self.bulk_map: return self.bulk_map[original_desc]
-        demand_clean = self._normalize_text(original_desc)
-        if demand_clean in self.clean_bulk_map: return self.clean_bulk_map[demand_clean]
-        for key, variant in self.clean_bulk_map.items():
-            if len(demand_clean) > 5 and (demand_clean in key or key in demand_clean):
-                return variant
-        desc_lower = original_desc.lower()
-        for keyword in config.RULE_CLIMBAZOLE:
-            if keyword in desc_lower: return VariantInfo(gcas=config.GCAS_CLIMBAZOLE, weight_per_container=0)
+        # 1. Try Exact Match
+        if demand.description in self.bulk_map:
+            return self.bulk_map[demand.description]
+
+        # 2. Try Cleaned Match
+        clean_desc = self._normalize_text(demand.description)
+        if clean_desc in self.clean_bulk_map:
+            return self.clean_bulk_map[clean_desc]
+
         return None
 
-    def calculate_msu(self, quantity: float, weight_per_container: float) -> float:
-        if weight_per_container <= 0 or quantity <= 0: return 0.0
-        return (quantity * weight_per_container) / config.MSU_UNIT_KG
+    def calculate_msu(self, quantity_cases: float, weight_per_case: float) -> float:
+        total_kg = quantity_cases * weight_per_case
+        return total_kg / config.MSU_UNIT_KG
 
-    def select_system(self, demand: Demand, sku: SKUMeta, variant: VariantInfo) -> Tuple[str, float, float]:
-        desc_lower = str(demand.description).lower()
+    def select_system(self, demand: Demand, sku: Optional[SKUMeta], variant: VariantInfo) -> Tuple[str, int, float]:
+        # 1. System Selection (Based on description strings and business rules)
+        system = "12T"
+        desc_lower = demand.description.lower()
+        is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
 
-        # 1. Climbazole Premix (GCAS 91879323)
-        if demand.material_code == config.GCAS_CLIMBAZOLE or any(k in desc_lower for k in config.RULE_CLIMBAZOLE):
-            msu_size = 1200.0 / config.MSU_UNIT_KG
-            return ("1.25T", 180, msu_size)
+        # Force 6T for Conditioners or explicitly named 6T variants
+        if "6t" in desc_lower or (variant.gcas != "UNKNOWN" and "6T" in str(variant.gcas)) or is_cond:
+            system = "6T"
 
-        # 2. HC Base (GCAS 95619314)
-        if demand.material_code == config.GCAS_HC_BASE or any(k in desc_lower for k in config.RULE_HC_BASE):
-            needed_kg = demand.quantity
-            target = "12T"
-            if needed_kg > 0 and needed_kg <= 2900:
-                target = "6T"
+        # 2. MSU Calculation
+        if demand.material_code == config.GCAS_CLIMBAZOLE:
+            msu = 1200.0 / config.MSU_UNIT_KG
+        elif demand.material_code == config.GCAS_HC_BASE:
+            msu = demand.quantity / config.MSU_UNIT_KG
+        else:
+            msu = self.calculate_msu(demand.quantity, variant.weight_per_container if variant else 0)
 
-            batch_kg = 5900.0 if target == "12T" else 2900.0
-            msu_size = batch_kg / config.MSU_UNIT_KG
-            return (target, self._get_bct(sku, target), msu_size)
+        # Downgrade small batches to 6T automatically
+        if system == "12T" and msu < config.MSU_THRESHOLD_6T:
+            system = "6T"
 
-        # Standard Logic for Consumer Goods
-        msu = self.calculate_msu(demand.quantity, variant.weight_per_container)
-        target_size = "12T"
-        if msu > 0 and msu < config.MSU_THRESHOLD_6T: target_size = "6T"
+            # 3. BCT Lookup (Robust / Safe Mode)
+        bct = config.DEFAULT_DURATION
+        if sku:
+            val = None
+            if system == "12T":
+                val = getattr(sku, 'bct_12t', getattr(sku, 'bct', None))
+            elif system == "6T":
+                val = getattr(sku, 'bct_6t', getattr(sku, 'bct', None))
 
-        # 3. Conditioner
-        for kw in config.RULE_CONDITIONER:
-            if kw in desc_lower:
-                return ("6T", self._get_bct(sku, "6T"), msu)
+            if val is not None:
+                try:
+                    bct = int(val)
+                except (ValueError, TypeError):
+                    bct = config.DEFAULT_DURATION
 
-        return (target_size, self._get_bct(sku, target_size), msu)
-
-    def _get_bct(self, sku: SKUMeta, target_system: str) -> float:
-        if not sku: return config.DEFAULT_DURATION
-        if target_system in sku.bct_by_system: return sku.bct_by_system[target_system]
-        return config.DEFAULT_DURATION
+        return system, bct, msu
 
 
 # ---------------------------------------------------------
@@ -162,24 +164,29 @@ class Scheduler:
         # --- STEP 2: AGGREGATE BATCHES GLOBALLY BY GCAS ---
         accumulating_demands = {}
         merged_demands_info = []
-        max_12t_msu = 4.6  # Safe maximum physical capacity for a 12T system
 
         for item in enriched_demands:
             gcas = item["gcas"]
-            is_replenish = "Replenishment" in item["demand"].description
+            desc_lower = item["demand"].description.lower()
+            is_replenish = "replenishment" in desc_lower
 
-            # Don't merge replenishments or unknown SKUs
+            # Dynamic Aggregation Limit: Cap Conditioners and 6T products at 2.3 MSU
+            is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
+            is_explicit_6t = "6t" in desc_lower or (
+                        item["variant"] and item["variant"].gcas != "UNKNOWN" and "6T" in str(item["variant"].gcas))
+
+            max_msu_limit = config.MSU_THRESHOLD_6T if (is_cond or is_explicit_6t) else 4.6
+
             if is_replenish or gcas == "UNKNOWN":
                 merged_demands_info.append(item)
                 continue
 
-            # If we are already tracking this GCAS, try to add to it
             if gcas in accumulating_demands:
                 current = accumulating_demands[gcas]
                 combined_msu = current["msu"] + item["msu"]
 
-                if combined_msu <= max_12t_msu:
-                    # It fits! Merge them together.
+                # Only merge if it safely fits in the designated system capacity
+                if combined_msu <= max_msu_limit:
                     merged_demand = Demand(
                         order_id=f"{current['demand'].order_id} + {item['demand'].order_id}",
                         material_code=current["demand"].material_code,
@@ -196,7 +203,7 @@ class Scheduler:
                         "msu": combined_msu
                     }
                 else:
-                    # Exceeds capacity. Commit the old one and start a new pool.
+                    # Capacity full: Commit the current batch and start a new one
                     merged_demands_info.append(current)
                     accumulating_demands[gcas] = item
             else:
@@ -206,7 +213,6 @@ class Scheduler:
             merged_demands_info.append(item)
 
         merged_demands_info.sort(key=lambda x: x["demand"].pkg_start_dt)
-
         print(f"   > Aggregated into {len(merged_demands_info)} unique making batches.")
 
         # --- STEP 3: ASSIGN TO PRODUCTION BATCHES ---
@@ -258,6 +264,7 @@ class Scheduler:
             batch_id_counter += 1
 
         return self.batches
+
 
 # ---------------------------------------------------------
 # 3. TANK SCHEDULER (HYBRID OPTIMIZATION)
@@ -360,7 +367,6 @@ class TankScheduler:
                             b.mkg_end_dt = latest_end
                             b.mkg_start_dt = latest_end - timedelta(minutes=b.bct)
 
-                    # ROOT CAUSE FIX: Re-sync the shift and buffer text once the math is done
                     b.shift = self._get_shift(b.mkg_start_dt)
                     b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
 
@@ -415,7 +421,7 @@ class TankScheduler:
                     else:
                         anchor_dt -= timedelta(minutes=max_violation)
 
-                # ROOT CAUSE FIX: Re-sync the shift and buffer text once the valid anchor is found
+                # Assign final buffers and map washouts
                 for i, b in enumerate(tank_batches):
                     b.shift = self._get_shift(b.mkg_start_dt)
                     b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
@@ -437,10 +443,11 @@ class TankScheduler:
 
 
 # ---------------------------------------------------------
-# 4. STORAGE ASSIGNER (SPLIT ROUTING)
+# 4. STORAGE ASSIGNER (SPLIT ROUTING + WASHOUT QUEUEING)
 # ---------------------------------------------------------
 class StorageAssigner:
-    def __init__(self, tank_snapshot: pd.DataFrame):
+    def __init__(self, tank_snapshot: pd.DataFrame, pst_wo_matrix: dict = None):
+        self.pst_wo_matrix = pst_wo_matrix or {}
         self.tanks = {}
         self.portable_tanks = [f"TK#_{i}_#" for i in range(1, 29)]
         self.ronchi_tanks = ["TK#_51_#", "TK#_52_#", "TK#_53_#"]
@@ -467,7 +474,7 @@ class StorageAssigner:
                 }
 
     def assign_tanks(self, batches: List[ProductionBatch]):
-        print("--- Assigning Storage Tanks (Split Routing: 12T to Ronchi OR 2x Portable) ---")
+        print("--- Assigning Storage Tanks (Split Routing + Dynamic Washouts) ---")
         batches.sort(key=lambda x: x.mkg_end_dt)
 
         for b in batches:
@@ -479,53 +486,65 @@ class StorageAssigner:
             ronchi_candidates = []
             portable_candidates = []
 
-            # Score all available tanks
             for tid, state in self.tanks.items():
                 if not state["is_usable"]: continue
-                if state["available_at"] > needed_start: continue
 
+                tank_gcas = state["current_gcas"]
+                is_clean = (state["status_code"] == 1)
+                wash_time = 0
+
+                # 1. Determine Washout Requirement
+                if is_clean:
+                    wash_time = 0
+                elif tank_gcas == gcas:
+                    wash_time = 0  # Continuous run of the same product
+                else:
+                    # Tank contains a different product. Lookup 20 min wash time in matrix.
+                    key = (tank_gcas, gcas)
+                    wash_time = self.pst_wo_matrix.get(key, 20)
+
+                    # 2. Calculate when the tank is ACTUALLY ready
+                ready_at = state["available_at"] + timedelta(minutes=wash_time)
+
+                if ready_at > needed_start:
+                    continue  # Tank won't finish washing in time
+
+                # 3. Score the tank
                 score = -1
-                if state["status_code"] == 7 and state["current_gcas"] == gcas:
-                    score = 1
-                elif state["status_code"] == 1:
-                    score = 2
-                elif state["status_code"] == 14:
-                    score = 3
-                elif state["status_code"] == 7:
-                    score = 4
+                if wash_time == 0 and tank_gcas == gcas:
+                    score = 1  # Best: Same product
+                elif wash_time == 0 and is_clean:
+                    score = 2  # Good: Already Clean
+                else:
+                    score = 3  # Viable: Needs a Washout
 
-                if score > 0:
-                    idle_time = (needed_start - state["available_at"]).total_seconds()
-                    if state["type"] == "RONCHI":
-                        ronchi_candidates.append((score, idle_time, tid))
-                    else:
-                        portable_candidates.append((score, idle_time, tid))
+                idle_time = (needed_start - ready_at).total_seconds()
 
-            # Sort by best score, then lowest idle time
+                if state["type"] == "RONCHI":
+                    ronchi_candidates.append((score, idle_time, tid))
+                else:
+                    portable_candidates.append((score, idle_time, tid))
+
             ronchi_candidates.sort(key=lambda x: (x[0], x[1]))
             portable_candidates.sort(key=lambda x: (x[0], x[1]))
 
             assigned_tanks = []
 
             if is_12t:
-                # 12T Routing: Prefer 1 Ronchi tank. Fallback to 2 Portable tanks.
                 if ronchi_candidates:
                     assigned_tanks.append(ronchi_candidates[0][2])
                 elif len(portable_candidates) >= 2:
                     assigned_tanks.append(portable_candidates[0][2])
                     assigned_tanks.append(portable_candidates[1][2])
             else:
-                # 6T Routing: Strictly requires 1 Portable tank
                 if portable_candidates:
                     assigned_tanks.append(portable_candidates[0][2])
 
-            # Commit the assignments
             if assigned_tanks:
-                # Glues the tank names together, e.g., "TK#_15_# + TK#_16_#"
                 b.storage_tank = " + ".join(assigned_tanks)
 
-                # Update the status for ALL assigned tanks
                 for tank in assigned_tanks:
+                    # The tank will now be busy until the packing ends, and will hold the new GCAS
                     self.tanks[tank]["available_at"] = needed_end
                     self.tanks[tank]["current_gcas"] = gcas
                     self.tanks[tank]["status_code"] = 7

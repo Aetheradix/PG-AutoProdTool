@@ -6,11 +6,9 @@
   <component name="ChangeListManager">
     <list default="true" id="8e094196-47f9-4b6f-aa09-e2267cdcd33b" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/data/output/Final Production Plan 2026-01-14.xlsx" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/data/output/Final Production Plan 2026-01-14.xlsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/APPT/data/output/Final_Production_Plan.xlsx" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/data/output/Final_Production_Plan.xlsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/src/mrp.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/mrp.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/src/run_batch_simulation.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/run_batch_simulation.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/src/update_rm_status.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/update_rm_status.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/src/logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/logic.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/src/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -65,6 +63,7 @@
     "Python.inspect_data.executor": "Run",
     "Python.inspect_rm.executor": "Run",
     "Python.inspect_sku_column.executor": "Run",
+    "Python.logic.executor": "Run",
     "Python.main.executor": "Run",
     "Python.migrate_to_sql.executor": "Run",
     "Python.run_batch_simulation.executor": "Run",
