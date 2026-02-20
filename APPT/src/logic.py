@@ -31,11 +31,9 @@ class PlanEnricher:
         if demand.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
             return None
 
-        # 1. Try Exact Match
         if demand.description in self.bulk_map:
             return self.bulk_map[demand.description]
 
-        # 2. Try Cleaned Match
         clean_desc = self._normalize_text(demand.description)
         if clean_desc in self.clean_bulk_map:
             return self.clean_bulk_map[clean_desc]
@@ -47,16 +45,13 @@ class PlanEnricher:
         return total_kg / config.MSU_UNIT_KG
 
     def select_system(self, demand: Demand, sku: Optional[SKUMeta], variant: VariantInfo) -> Tuple[str, int, float]:
-        # 1. System Selection (Based on description strings and business rules)
         system = "12T"
         desc_lower = demand.description.lower()
         is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
 
-        # Force 6T for Conditioners or explicitly named 6T variants
         if "6t" in desc_lower or (variant.gcas != "UNKNOWN" and "6T" in str(variant.gcas)) or is_cond:
             system = "6T"
 
-        # 2. MSU Calculation
         if demand.material_code == config.GCAS_CLIMBAZOLE:
             msu = 1200.0 / config.MSU_UNIT_KG
         elif demand.material_code == config.GCAS_HC_BASE:
@@ -64,11 +59,9 @@ class PlanEnricher:
         else:
             msu = self.calculate_msu(demand.quantity, variant.weight_per_container if variant else 0)
 
-        # Downgrade small batches to 6T automatically
         if system == "12T" and msu < config.MSU_THRESHOLD_6T:
             system = "6T"
 
-            # 3. BCT Lookup (Robust / Safe Mode)
         bct = config.DEFAULT_DURATION
         if sku:
             val = None
@@ -119,27 +112,23 @@ class Scheduler:
     def run_initial_schedule(self, demands: List[Demand]) -> List[ProductionBatch]:
         print(f"--- Calculating Initial Schedule ({len(demands)} raw demands) ---")
 
-        # --- STEP 1: PRE-PROCESS, FILTER & CALCULATE MSU ---
         enriched_demands = []
         skipped_auto = 0
 
         for d in demands:
             variant = self.enricher.find_variant_for_demand(d)
 
-            # 1. Resolve GCAS
             gcas = variant.gcas if variant else "UNKNOWN"
             if d.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
                 gcas = d.material_code
 
             raw_gcas = str(gcas).strip().upper()
 
-            # 2. BULLETPROOF FILTER: Drop Auto-Prepared / Missing GCAS Batches
             if raw_gcas in ['', 'NAN', 'NONE', 'NULL', 'UNKNOWN']:
                 print(f"   > Dropping auto-prepared/unknown batch: {d.description}")
                 skipped_auto += 1
                 continue
 
-            # 3. Calculate MSU
             msu = 0.0
             if gcas == config.GCAS_CLIMBAZOLE:
                 msu = 1200.0 / config.MSU_UNIT_KG
@@ -158,10 +147,9 @@ class Scheduler:
         if skipped_auto > 0:
             print(f"   > Ignored {skipped_auto} un-routable auto-prepared batches.")
 
-        # Sort chronologically by packing start time
         enriched_demands.sort(key=lambda x: x["demand"].pkg_start_dt)
 
-        # --- STEP 2: AGGREGATE BATCHES GLOBALLY BY GCAS ---
+        # --- STEP 2: AGGREGATE BATCHES DYNAMICALLY ---
         accumulating_demands = {}
         merged_demands_info = []
 
@@ -170,12 +158,18 @@ class Scheduler:
             desc_lower = item["demand"].description.lower()
             is_replenish = "replenishment" in desc_lower
 
-            # Dynamic Aggregation Limit: Cap Conditioners and 6T products at 2.3 MSU
+            # DYNAMIC LIMITS
             is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
             is_explicit_6t = "6t" in desc_lower or (
                         item["variant"] and item["variant"].gcas != "UNKNOWN" and "6T" in str(item["variant"].gcas))
 
-            max_msu_limit = config.MSU_THRESHOLD_6T if (is_cond or is_explicit_6t) else 4.6
+            # Restrict conditioners to max ~1.2 MSU (approx 2 batches)
+            if is_cond:
+                max_msu_limit = 1.2
+            elif is_explicit_6t:
+                max_msu_limit = config.MSU_THRESHOLD_6T
+            else:
+                max_msu_limit = 4.6
 
             if is_replenish or gcas == "UNKNOWN":
                 merged_demands_info.append(item)
@@ -185,7 +179,6 @@ class Scheduler:
                 current = accumulating_demands[gcas]
                 combined_msu = current["msu"] + item["msu"]
 
-                # Only merge if it safely fits in the designated system capacity
                 if combined_msu <= max_msu_limit:
                     merged_demand = Demand(
                         order_id=f"{current['demand'].order_id} + {item['demand'].order_id}",
@@ -203,7 +196,6 @@ class Scheduler:
                         "msu": combined_msu
                     }
                 else:
-                    # Capacity full: Commit the current batch and start a new one
                     merged_demands_info.append(current)
                     accumulating_demands[gcas] = item
             else:
@@ -289,16 +281,13 @@ class TankScheduler:
         return config.WASHOUT_DURATION
 
     def _get_shift(self, dt: datetime) -> str:
-        """Helper to recalculate the shift based on mutated timestamps."""
         t = dt.time()
         if t >= time(7, 30) and t < time(15, 30): return "A"
         if t >= time(15, 30) and t < time(23, 30): return "B"
         return "C"
 
-    def _push_past_shift_c(self, start_dt: datetime, duration_mins: int) -> datetime:
-        """
-        Intelligently pushes a batch forward until the entire batch avoids Shift C (23:30 - 07:30).
-        """
+    def _avoid_shift_c(self, start_dt: datetime, duration_mins: int, forward: bool = True) -> datetime:
+        """Bidirectional engine to ensure a batch strictly avoids 23:30 - 07:30."""
         current_start = start_dt
         while True:
             end_dt = current_start + timedelta(minutes=duration_mins)
@@ -310,7 +299,7 @@ class TankScheduler:
                 if t >= time(23, 30) or t < time(7, 30):
                     overlap = True
                     break
-                curr += timedelta(minutes=10)
+                curr += timedelta(minutes=5)
 
             if not overlap:
                 t_end = end_dt.time()
@@ -318,22 +307,29 @@ class TankScheduler:
                     overlap = True
 
             if overlap:
-                t = current_start.time()
-                if t >= time(23, 30):
-                    current_start = (current_start + timedelta(days=1)).replace(hour=7, minute=30, second=0,
-                                                                                microsecond=0)
-                elif t < time(7, 30):
-                    current_start = current_start.replace(hour=7, minute=30, second=0, microsecond=0)
+                if forward:
+                    if current_start.time() >= time(23, 30):
+                        current_start = (current_start + timedelta(days=1)).replace(hour=7, minute=30, second=0,
+                                                                                    microsecond=0)
+                    else:
+                        current_start = current_start.replace(hour=7, minute=30, second=0, microsecond=0)
                 else:
-                    current_start = (current_start + timedelta(days=1)).replace(hour=7, minute=30, second=0,
-                                                                                microsecond=0)
+                    if current_start.time() <= time(7, 30):
+                        target_end = (current_start - timedelta(days=1)).replace(hour=23, minute=30, second=0,
+                                                                                 microsecond=0)
+                    elif current_start.time() >= time(23, 30):
+                        target_end = current_start.replace(hour=23, minute=30, second=0, microsecond=0)
+                    else:
+                        target_end = current_start.replace(hour=23, minute=30, second=0, microsecond=0)
+
+                    current_start = target_end - timedelta(minutes=duration_mins)
             else:
                 break
 
         return current_start
 
     def optimize(self, batches: List[ProductionBatch]) -> Tuple[List[ProductionBatch], List[dict]]:
-        print("--- Optimizing Tank Queue (12T=JIT, 6T=Forward No-Shift-C) ---")
+        print("--- Optimizing Tank Queue (Shift Isolation & Fluid Routing) ---")
 
         tanks = {"Tank_12T": [], "Tank_6T": [], "Tank_1.25T": [], "Other": []}
         for b in batches:
@@ -353,7 +349,7 @@ class TankScheduler:
             if not tank_batches: continue
 
             if tank_name == "Tank_12T":
-                # --- BACKWARD SCHEDULING (JIT) ---
+                # --- BACKWARD SCHEDULING ---
                 tank_batches.sort(key=lambda x: x.mkg_start_dt, reverse=True)
                 for i, b in enumerate(tank_batches):
                     if i > 0:
@@ -366,6 +362,11 @@ class TankScheduler:
                         if b.mkg_end_dt > latest_end:
                             b.mkg_end_dt = latest_end
                             b.mkg_start_dt = latest_end - timedelta(minutes=b.bct)
+
+                    # SHIFT EJECTION: Pull backward if line is not INT2
+                    if b.line != "INT2":
+                        b.mkg_start_dt = self._avoid_shift_c(b.mkg_start_dt, b.bct, forward=False)
+                        b.mkg_end_dt = b.mkg_start_dt + timedelta(minutes=b.bct)
 
                     b.shift = self._get_shift(b.mkg_start_dt)
                     b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
@@ -387,7 +388,7 @@ class TankScheduler:
                 final_batches.extend(tank_batches)
 
             else:
-                # --- ITERATIVE FORWARD SCHEDULING (6T / 1.25T) ---
+                # --- FORWARD SCHEDULING ---
                 tank_batches.sort(key=lambda x: x.mkg_start_dt)
                 anchor_dt = tank_batches[0].mkg_start_dt
 
@@ -396,17 +397,21 @@ class TankScheduler:
 
                     for i, b in enumerate(tank_batches):
                         if i == 0:
-                            b.mkg_start_dt = self._push_past_shift_c(anchor_dt, b.bct)
-                            b.mkg_end_dt = b.mkg_start_dt + timedelta(minutes=b.bct)
+                            proposed_start = anchor_dt
                         else:
                             prev = tank_batches[i - 1]
                             wash_dur = config.COND_POST_WASH if self._is_conditioner(
                                 prev) else self._get_matrix_washout(prev, b)
                             gap = wash_dur + (config.COND_COOLDOWN if self._is_conditioner(b) else 0)
-
                             proposed_start = prev.mkg_end_dt + timedelta(minutes=gap)
-                            b.mkg_start_dt = self._push_past_shift_c(proposed_start, b.bct)
-                            b.mkg_end_dt = b.mkg_start_dt + timedelta(minutes=b.bct)
+
+                        # SHIFT EJECTION: Push forward if line is not INT2
+                        if b.line != "INT2":
+                            b.mkg_start_dt = self._avoid_shift_c(proposed_start, b.bct, forward=True)
+                        else:
+                            b.mkg_start_dt = proposed_start
+
+                        b.mkg_end_dt = b.mkg_start_dt + timedelta(minutes=b.bct)
 
                         min_buf = config.BUFFER_COND if self._is_conditioner(b) else config.BUFFER_STD
                         current_buffer = (b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60
@@ -421,7 +426,7 @@ class TankScheduler:
                     else:
                         anchor_dt -= timedelta(minutes=max_violation)
 
-                # Assign final buffers and map washouts
+                # Map washouts
                 for i, b in enumerate(tank_batches):
                     b.shift = self._get_shift(b.mkg_start_dt)
                     b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
@@ -443,7 +448,7 @@ class TankScheduler:
 
 
 # ---------------------------------------------------------
-# 4. STORAGE ASSIGNER (SPLIT ROUTING + WASHOUT QUEUEING)
+# 4. STORAGE ASSIGNER (ZONING & PENALTY ROUTING)
 # ---------------------------------------------------------
 class StorageAssigner:
     def __init__(self, tank_snapshot: pd.DataFrame, pst_wo_matrix: dict = None):
@@ -458,30 +463,33 @@ class StorageAssigner:
                 tid = row['tank_id']
                 if tid not in self.allowed_tanks: continue
 
-                is_usable = False
                 code = int(row['color_code']) if pd.notna(row['color_code']) else 0
                 gcas = str(row['current_gcas']).strip()
-                if code in [1, 7, 14]: is_usable = True
-
                 tank_type = "RONCHI" if tid in self.ronchi_tanks else "PORTABLE"
 
                 self.tanks[tid] = {
                     "available_at": datetime(2000, 1, 1),
                     "status_code": code,
                     "current_gcas": gcas,
-                    "is_usable": is_usable,
+                    "is_usable": True,  # UNLOCKED: All 28 tanks are physically routable
                     "type": tank_type
                 }
 
     def assign_tanks(self, batches: List[ProductionBatch]):
-        print("--- Assigning Storage Tanks (Split Routing + Dynamic Washouts) ---")
+        print("--- Assigning Storage Tanks (Zoning + Dynamic Washout Labels) ---")
         batches.sort(key=lambda x: x.mkg_end_dt)
+
+        cond_pref_tanks = ["TK#_25_#", "TK#_26_#", "TK#_27_#", "TK#_28_#"]
+        cond_fallback_tanks = [f"TK#_{i}_#" for i in range(1, 25)]
 
         for b in batches:
             needed_start = b.mkg_end_dt
             needed_end = b.pkg_end_dt
             gcas = str(b.sku_code).strip()
             is_12t = "12T" in b.system
+
+            is_cond = any(kw in b.desc.lower() for kw in config.RULE_CONDITIONER)
+            is_int2 = (b.line == "INT2")
 
             ronchi_candidates = []
             portable_candidates = []
@@ -493,37 +501,57 @@ class StorageAssigner:
                 is_clean = (state["status_code"] == 1)
                 wash_time = 0
 
-                # 1. Determine Washout Requirement
+                # Determine wash time from pst_wo_matrix
                 if is_clean:
                     wash_time = 0
                 elif tank_gcas == gcas:
-                    wash_time = 0  # Continuous run of the same product
+                    wash_time = 0
                 else:
-                    # Tank contains a different product. Lookup 20 min wash time in matrix.
-                    key = (tank_gcas, gcas)
-                    wash_time = self.pst_wo_matrix.get(key, 20)
+                    wash_time = self.pst_wo_matrix.get((tank_gcas, gcas), 20)
 
-                    # 2. Calculate when the tank is ACTUALLY ready
                 ready_at = state["available_at"] + timedelta(minutes=wash_time)
+                if ready_at > needed_start: continue
 
-                if ready_at > needed_start:
-                    continue  # Tank won't finish washing in time
-
-                # 3. Score the tank
-                score = -1
+                # Base Availability Score
+                score = 0
                 if wash_time == 0 and tank_gcas == gcas:
-                    score = 1  # Best: Same product
+                    score = 1
                 elif wash_time == 0 and is_clean:
-                    score = 2  # Good: Already Clean
+                    score = 2
                 else:
-                    score = 3  # Viable: Needs a Washout
+                    score = 3
 
+                # Penalty Routing Logic
+                penalty = 0
+                if is_cond:
+                    if tid in cond_pref_tanks:
+                        penalty = 0
+                    elif tid in cond_fallback_tanks:
+                        penalty = 10
+                    else:
+                        continue
+                elif is_int2:
+                    if state["type"] == "RONCHI":
+                        penalty = 0
+                    elif state["type"] == "PORTABLE":
+                        penalty = 5
+                    else:
+                        continue
+                else:
+                    if state["type"] == "PORTABLE":
+                        penalty = 0
+                    elif state["type"] == "RONCHI" and is_12t:
+                        penalty = 5
+                    else:
+                        penalty = 10
+
+                final_score = score + penalty
                 idle_time = (needed_start - ready_at).total_seconds()
 
                 if state["type"] == "RONCHI":
-                    ronchi_candidates.append((score, idle_time, tid))
+                    ronchi_candidates.append((final_score, idle_time, tid, wash_time))
                 else:
-                    portable_candidates.append((score, idle_time, tid))
+                    portable_candidates.append((final_score, idle_time, tid, wash_time))
 
             ronchi_candidates.sort(key=lambda x: (x[0], x[1]))
             portable_candidates.sort(key=lambda x: (x[0], x[1]))
@@ -531,22 +559,47 @@ class StorageAssigner:
             assigned_tanks = []
 
             if is_12t:
-                if ronchi_candidates:
-                    assigned_tanks.append(ronchi_candidates[0][2])
-                elif len(portable_candidates) >= 2:
-                    assigned_tanks.append(portable_candidates[0][2])
-                    assigned_tanks.append(portable_candidates[1][2])
+                path_ronchi = ronchi_candidates[0] if ronchi_candidates else None
+                path_portable = None
+
+                if len(portable_candidates) >= 2:
+                    max_score = max(portable_candidates[0][0], portable_candidates[1][0])
+                    total_idle = portable_candidates[0][1] + portable_candidates[1][1]
+                    path_portable = (max_score, total_idle,
+                                     portable_candidates[0][2], portable_candidates[0][3],
+                                     portable_candidates[1][2], portable_candidates[1][3])
+
+                if path_ronchi and path_portable:
+                    if path_ronchi[0] <= path_portable[0]:
+                        assigned_tanks.append((path_ronchi[2], path_ronchi[3]))
+                    else:
+                        assigned_tanks.extend(
+                            [(path_portable[2], path_portable[3]), (path_portable[4], path_portable[5])])
+                elif path_ronchi:
+                    assigned_tanks.append((path_ronchi[2], path_ronchi[3]))
+                elif path_portable:
+                    assigned_tanks.extend([(path_portable[2], path_portable[3]), (path_portable[4], path_portable[5])])
             else:
                 if portable_candidates:
-                    assigned_tanks.append(portable_candidates[0][2])
+                    assigned_tanks.append((portable_candidates[0][2], portable_candidates[0][3]))
 
+            # Commit assignments and format string
             if assigned_tanks:
-                b.storage_tank = " + ".join(assigned_tanks)
+                tank_labels = []
+                for tank_id, w_time in assigned_tanks:
+                    # Append visual wash tag for Excel!
+                    label = f"{tank_id} [Wash {w_time}m]" if w_time > 0 else tank_id
+                    tank_labels.append(label)
 
-                for tank in assigned_tanks:
-                    # The tank will now be busy until the packing ends, and will hold the new GCAS
-                    self.tanks[tank]["available_at"] = needed_end
-                    self.tanks[tank]["current_gcas"] = gcas
-                    self.tanks[tank]["status_code"] = 7
+                    self.tanks[tank_id]["available_at"] = needed_end
+                    self.tanks[tank_id]["current_gcas"] = gcas
+                    self.tanks[tank_id]["status_code"] = 7
+
+                b.storage_tank = " + ".join(tank_labels)
+
+                # Check for the non-standard conditioner warning
+                if is_cond and any(tk_id in cond_fallback_tanks for tk_id, _ in assigned_tanks):
+                    warning = "WARN: Non-standard Cond tank"
+                    b.mrp_status = warning if not b.mrp_status or b.mrp_status == "OK" else f"{b.mrp_status} | {warning}"
             else:
                 b.storage_tank = "NO_TANK_AVAILABLE"
