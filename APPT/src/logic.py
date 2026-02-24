@@ -59,7 +59,9 @@ class PlanEnricher:
         else:
             msu = self.calculate_msu(demand.quantity, variant.weight_per_container if variant else 0)
 
-        if system == "12T" and msu < config.MSU_THRESHOLD_6T:
+        # Downgrade small batches to 6T automatically
+        # EXCEPTION: HC Base is a high-volume intermediate that must always run on 12T
+        if system == "12T" and msu < config.MSU_THRESHOLD_6T and demand.material_code != config.GCAS_HC_BASE:
             system = "6T"
 
         bct = config.DEFAULT_DURATION
