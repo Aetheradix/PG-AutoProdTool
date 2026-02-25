@@ -69,8 +69,40 @@ async def get_status(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
 
 
+@router.get("/ghantt-chart")
+async def timeline_event(limit: int = Query(default=100, ge=1, le=1000)):
+    """
+    Returns timeline event data for Gantt chart representation.
+    """
+    try:
+        engine = get_engine()
+        query = text(
+            "SELECT * FROM timeline_events ORDER BY start_time ASC LIMIT :limit"
+        )
+        df = pd.read_sql(query, engine, params={"limit": limit})
 
+        data = df.to_dict(orient="records")
+        grouped_data = {
+            "6T": [],
+            "12T": [],
+            "Tanks": []
+        }
 
+        for item in data:
+            resource_name = str(item.get("resource_name", "")).upper()
+            resource_type = str(item.get("resource_type", "")).upper()
+
+            if resource_name == "6T":
+                grouped_data["6T"].append(item)
+            elif resource_name == "12T":
+                grouped_data["12T"].append(item)
+            elif resource_type == "STORAGE_TANK" or "TANK" in resource_name or "TK#" in resource_name:
+                grouped_data["Tanks"].append(item)
+            else:
+                grouped_data["Tanks"].append(item)
+
+        return {"success": True, "count": len(df), "data": grouped_data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
