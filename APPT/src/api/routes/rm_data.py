@@ -24,7 +24,6 @@ async def get_rm_data():
 
         df = pd.read_sql(query, engine)
 
-        # Get latest update time from rm_data table
         time_query = text("SELECT MAX(DateandTime) FROM rm_data")
         with engine.connect() as conn:
             latest_time = conn.execute(time_query).scalar()
@@ -32,10 +31,9 @@ async def get_rm_data():
         if "current_value" in df.columns:
             df = df[df["current_value"] > 0]
 
-        # Add status hex code
         df["hex_code"] = np.where(df["status"] == True, "#28a745", "#dc3545")
         
-        # Rename perfume tanks for UI mapping
+    
         rename_map = {
             "Perfume1_Tank_Level": "FASCINATING_TANK_LEVEL",
             "Perfume2_Tank_Level": "GIRL_SQUAD_TANK_LEVEL",
@@ -43,8 +41,11 @@ async def get_rm_data():
         }
         df["tank_name"] = df["tank_name"].replace(rename_map)
 
-        # VERY IMPORTANT: Add 'id' field for frontend data tables
+
         df["id"] = df["tank_name"]
+
+        df["unit"] = np.where((df["current_value"] > 100) | (df["deadstock_value"] > 100), "kg", "%")
+        df["value_with_unit"] = df["current_value"].round(2).astype(str) + " " + df["unit"]
 
         df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
 

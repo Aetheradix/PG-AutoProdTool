@@ -11,6 +11,7 @@ from src.api.routes import (
     rm_data,
     production_schedule,
     bpr_pdr,
+    tank_status,
 )
 
 app = FastAPI(
@@ -45,6 +46,9 @@ app.include_router(
 )
 app.include_router(
     bpr_pdr.router, prefix="/api/v1/bpr-pdr", tags=["BPR-PDR"]
+)
+app.include_router(
+    tank_status.router, prefix="/api/v1/tank-status", tags=["Tank Status"]
 )
 
 
