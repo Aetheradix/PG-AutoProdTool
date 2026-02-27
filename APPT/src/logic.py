@@ -59,8 +59,6 @@ class PlanEnricher:
         else:
             msu = self.calculate_msu(demand.quantity, variant.weight_per_container if variant else 0)
 
-        # Downgrade small batches to 6T automatically
-        # EXCEPTION: HC Base is a high-volume intermediate that must always run on 12T
         if system == "12T" and msu < config.MSU_THRESHOLD_6T and demand.material_code != config.GCAS_HC_BASE:
             system = "6T"
 
@@ -82,12 +80,13 @@ class PlanEnricher:
 
 
 # ---------------------------------------------------------
-# 2. SCHEDULER (INITIAL PLACEMENT & AGGREGATION)
+# 2. SCHEDULER (INITIAL PLACEMENT & DYNAMIC BATCH IDs)
 # ---------------------------------------------------------
 class Scheduler:
     def __init__(self, enricher: PlanEnricher):
         self.enricher = enricher
         self.batches = []
+        self.next_batch_id = "CI400"  # Default fallback
 
     def _get_buffer_time(self, description: str) -> int:
         desc_lower = description.lower()
@@ -111,15 +110,45 @@ class Scheduler:
         if t >= time(15, 30) and t < time(23, 30): return "B"
         return "C"
 
-    def run_initial_schedule(self, demands: List[Demand]) -> List[ProductionBatch]:
+    def _generate_next_batch_id(self, current_id: str) -> str:
+        """Alphanumeric rollover: CI999 -> CJ001, CZ999 -> DA001"""
+        match = re.match(r"([A-Z]+)(\d+)", current_id.upper())
+        if not match:
+            return current_id  # Fallback if malformed
+
+        letters = match.group(1)
+        numbers = int(match.group(2))
+
+        numbers += 1
+        if numbers > 999:
+            numbers = 1
+            c_list = list(letters)
+            i = len(c_list) - 1
+            while i >= 0:
+                if c_list[i] == 'Z':
+                    c_list[i] = 'A'
+                    i -= 1
+                else:
+                    c_list[i] = chr(ord(c_list[i]) + 1)
+                    break
+            if i < 0:
+                c_list.insert(0, 'A')  # e.g., ZZ -> AAA
+            letters = "".join(c_list)
+
+        return f"{letters}{numbers:03d}"
+
+    def run_initial_schedule(self, demands: List[Demand], target_date: datetime = None,
+                             start_batch_id: str = "CI400") -> List[ProductionBatch]:
         print(f"--- Calculating Initial Schedule ({len(demands)} raw demands) ---")
+
+        anchor_date = target_date if target_date else demands[0].pkg_start_dt
+        date_str = anchor_date.strftime("%m%d")
 
         enriched_demands = []
         skipped_auto = 0
 
         for d in demands:
             variant = self.enricher.find_variant_for_demand(d)
-
             gcas = variant.gcas if variant else "UNKNOWN"
             if d.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
                 gcas = d.material_code
@@ -127,7 +156,6 @@ class Scheduler:
             raw_gcas = str(gcas).strip().upper()
 
             if raw_gcas in ['', 'NAN', 'NONE', 'NULL', 'UNKNOWN']:
-                print(f"   > Dropping auto-prepared/unknown batch: {d.description}")
                 skipped_auto += 1
                 continue
 
@@ -139,19 +167,13 @@ class Scheduler:
             else:
                 msu = self.enricher.calculate_msu(d.quantity, variant.weight_per_container if variant else 0)
 
-            enriched_demands.append({
-                "demand": d,
-                "gcas": gcas,
-                "variant": variant,
-                "msu": msu
-            })
+            enriched_demands.append({"demand": d, "gcas": gcas, "variant": variant, "msu": msu})
 
         if skipped_auto > 0:
             print(f"   > Ignored {skipped_auto} un-routable auto-prepared batches.")
 
         enriched_demands.sort(key=lambda x: x["demand"].pkg_start_dt)
 
-        # --- STEP 2: AGGREGATE BATCHES DYNAMICALLY ---
         accumulating_demands = {}
         merged_demands_info = []
 
@@ -160,12 +182,10 @@ class Scheduler:
             desc_lower = item["demand"].description.lower()
             is_replenish = "replenishment" in desc_lower
 
-            # DYNAMIC LIMITS
             is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
             is_explicit_6t = "6t" in desc_lower or (
                         item["variant"] and item["variant"].gcas != "UNKNOWN" and "6T" in str(item["variant"].gcas))
 
-            # Restrict conditioners to max ~1.2 MSU (approx 2 batches)
             if is_cond:
                 max_msu_limit = 1.2
             elif is_explicit_6t:
@@ -192,10 +212,7 @@ class Scheduler:
                         line="MIXED" if current["demand"].line != item["demand"].line else current["demand"].line
                     )
                     accumulating_demands[gcas] = {
-                        "demand": merged_demand,
-                        "gcas": gcas,
-                        "variant": current["variant"],
-                        "msu": combined_msu
+                        "demand": merged_demand, "gcas": gcas, "variant": current["variant"], "msu": combined_msu
                     }
                 else:
                     merged_demands_info.append(current)
@@ -209,8 +226,8 @@ class Scheduler:
         merged_demands_info.sort(key=lambda x: x["demand"].pkg_start_dt)
         print(f"   > Aggregated into {len(merged_demands_info)} unique making batches.")
 
-        # --- STEP 3: ASSIGN TO PRODUCTION BATCHES ---
-        batch_id_counter = 1
+        current_bid = start_batch_id
+        rep_counter = 1
         self.batches = []
 
         for info in merged_demands_info:
@@ -220,6 +237,14 @@ class Scheduler:
 
             sku = self.enricher.master_data.get(gcas)
             system, bct, msu = self.enricher.select_system(d, sku, variant if variant else VariantInfo("UNK", 0.0))
+
+            bulk_desc = d.description
+            if sku:
+                for attr in ['description', 'bulk_desc', 'bulk_description', 'name']:
+                    val = getattr(sku, attr, None)
+                    if val and str(val).strip() and str(val).lower() != "nan":
+                        bulk_desc = str(val).strip()
+                        break
 
             min_buffer = self._get_buffer_time(d.description)
             raw_mkg_end = d.pkg_start_dt - timedelta(minutes=min_buffer)
@@ -232,31 +257,27 @@ class Scheduler:
             tech_type = "Single"
             if sku: tech_type = sku.tech_class
 
-            bid = f"B{batch_id_counter:03d}"
+            # --- DYNAMIC BATCH IDENTIFIERS ---
             if "Replenishment" in d.description:
-                bid = f"REP{batch_id_counter:02d}"
+                # Replenishments get a distinct tracker so they don't eat standard batch IDs
+                bid = f"REP{rep_counter:02d}-{date_str}"
+                rep_counter += 1
+            else:
+                bid = current_bid
+                current_bid = self._generate_next_batch_id(current_bid)
 
             batch = ProductionBatch(
-                id=bid,
-                sku_code=gcas,
-                system=system,
-                shift=shift,
-                mkg_start_dt=final_mkg_start,
-                bct=int(bct),
-                mkg_end_dt=final_mkg_end,
-                buffer_min=actual_buffer,
-                pkg_start_dt=d.pkg_start_dt,
-                pkg_end_dt=d.pkg_end_dt,
-                linked_order=d.order_id,
-                material=d.material_code,
-                desc=d.description,
-                total_msu=msu,
-                line=d.line,
-                tech_type=tech_type
+                id=bid, sku_code=gcas, system=system, shift=shift,
+                mkg_start_dt=final_mkg_start, bct=int(bct),
+                mkg_end_dt=final_mkg_end, buffer_min=actual_buffer,
+                pkg_start_dt=d.pkg_start_dt, pkg_end_dt=d.pkg_end_dt,
+                linked_order=d.order_id, material=d.material_code,
+                desc=bulk_desc, total_msu=msu, line=d.line, tech_type=tech_type
             )
             self.batches.append(batch)
-            batch_id_counter += 1
 
+        # Store the next available ID so the main loop can grab it for tomorrow!
+        self.next_batch_id = current_bid
         return self.batches
 
 
@@ -289,7 +310,6 @@ class TankScheduler:
         return "C"
 
     def _avoid_shift_c(self, start_dt: datetime, duration_mins: int, forward: bool = True) -> datetime:
-        """Bidirectional engine to ensure a batch strictly avoids 23:30 - 07:30."""
         current_start = start_dt
         while True:
             end_dt = current_start + timedelta(minutes=duration_mins)
@@ -309,29 +329,33 @@ class TankScheduler:
                     overlap = True
 
             if overlap:
+                t = current_start.time()
                 if forward:
-                    if current_start.time() >= time(23, 30):
+                    if t >= time(23, 30):
                         current_start = (current_start + timedelta(days=1)).replace(hour=7, minute=30, second=0,
                                                                                     microsecond=0)
-                    else:
+                    elif t < time(7, 30):
                         current_start = current_start.replace(hour=7, minute=30, second=0, microsecond=0)
+                    else:
+                        current_start = (current_start + timedelta(days=1)).replace(hour=7, minute=30, second=0,
+                                                                                    microsecond=0)
                 else:
-                    if current_start.time() <= time(7, 30):
+                    if t <= time(7, 30):
                         target_end = (current_start - timedelta(days=1)).replace(hour=23, minute=30, second=0,
                                                                                  microsecond=0)
-                    elif current_start.time() >= time(23, 30):
+                    elif t >= time(23, 30):
                         target_end = current_start.replace(hour=23, minute=30, second=0, microsecond=0)
                     else:
                         target_end = current_start.replace(hour=23, minute=30, second=0, microsecond=0)
-
                     current_start = target_end - timedelta(minutes=duration_mins)
             else:
                 break
 
         return current_start
 
-    def optimize(self, batches: List[ProductionBatch]) -> Tuple[List[ProductionBatch], List[dict]]:
-        print("--- Optimizing Tank Queue (Shift Isolation & Fluid Routing) ---")
+    def optimize(self, batches: List[ProductionBatch], target_date: datetime = None) -> Tuple[
+        List[ProductionBatch], List[dict]]:
+        print("--- Optimizing Tank Queue (Shift Isolation & Max Buffer Clamp) ---")
 
         tanks = {"Tank_12T": [], "Tank_6T": [], "Tank_1.25T": [], "Other": []}
         for b in batches:
@@ -351,7 +375,6 @@ class TankScheduler:
             if not tank_batches: continue
 
             if tank_name == "Tank_12T":
-                # --- BACKWARD SCHEDULING ---
                 tank_batches.sort(key=lambda x: x.mkg_start_dt, reverse=True)
                 for i, b in enumerate(tank_batches):
                     if i > 0:
@@ -365,15 +388,14 @@ class TankScheduler:
                             b.mkg_end_dt = latest_end
                             b.mkg_start_dt = latest_end - timedelta(minutes=b.bct)
 
-                    # SHIFT EJECTION: Pull backward if line is not INT2
-                    if b.line != "INT2":
+                    is_int2 = (b.line == "INT2")
+                    if not is_int2:
                         b.mkg_start_dt = self._avoid_shift_c(b.mkg_start_dt, b.bct, forward=False)
                         b.mkg_end_dt = b.mkg_start_dt + timedelta(minutes=b.bct)
 
                     b.shift = self._get_shift(b.mkg_start_dt)
                     b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
 
-                # Map washouts
                 tank_batches.sort(key=lambda x: x.mkg_start_dt)
                 for i in range(1, len(tank_batches)):
                     prev = tank_batches[i - 1]
@@ -382,21 +404,18 @@ class TankScheduler:
                     wash_dur = config.COND_POST_WASH if is_prev_cond else self._get_matrix_washout(prev, curr)
                     if wash_dur > 0:
                         washouts.append({
-                            "System": curr.system,
-                            "Start": prev.mkg_end_dt,
+                            "System": curr.system, "Start": prev.mkg_end_dt,
                             "End": prev.mkg_end_dt + timedelta(minutes=wash_dur),
                             "Desc": "COND WASH (60m)" if is_prev_cond else "WASHOUT"
                         })
                 final_batches.extend(tank_batches)
 
             else:
-                # --- FORWARD SCHEDULING ---
                 tank_batches.sort(key=lambda x: x.mkg_start_dt)
-                anchor_dt = tank_batches[0].mkg_start_dt
+                anchor_dt = target_date.replace(hour=7, minute=30) if target_date else tank_batches[0].mkg_start_dt
 
                 for iteration in range(15):
                     max_violation = 0
-
                     for i, b in enumerate(tank_batches):
                         if i == 0:
                             proposed_start = anchor_dt
@@ -407,40 +426,39 @@ class TankScheduler:
                             gap = wash_dur + (config.COND_COOLDOWN if self._is_conditioner(b) else 0)
                             proposed_start = prev.mkg_end_dt + timedelta(minutes=gap)
 
-                        # SHIFT EJECTION: Push forward if line is not INT2
-                        if b.line != "INT2":
+                        earliest_allowed_start = b.pkg_start_dt - timedelta(days=2) - timedelta(minutes=b.bct)
+                        if proposed_start < earliest_allowed_start:
+                            proposed_start = earliest_allowed_start
+
+                        is_int2 = (b.line == "INT2")
+                        if not is_int2:
                             b.mkg_start_dt = self._avoid_shift_c(proposed_start, b.bct, forward=True)
                         else:
                             b.mkg_start_dt = proposed_start
 
                         b.mkg_end_dt = b.mkg_start_dt + timedelta(minutes=b.bct)
-
                         min_buf = config.BUFFER_COND if self._is_conditioner(b) else config.BUFFER_STD
                         current_buffer = (b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60
 
                         if current_buffer < min_buf:
                             violation = min_buf - current_buffer
-                            if violation > max_violation:
-                                max_violation = violation
+                            if violation > max_violation: max_violation = violation
 
                     if max_violation <= 0:
                         break
                     else:
                         anchor_dt -= timedelta(minutes=max_violation)
 
-                # Map washouts
                 for i, b in enumerate(tank_batches):
                     b.shift = self._get_shift(b.mkg_start_dt)
                     b.buffer_min = int((b.pkg_start_dt - b.mkg_end_dt).total_seconds() / 60)
-
                     if i > 0:
                         prev = tank_batches[i - 1]
                         is_prev_cond = self._is_conditioner(prev)
                         wash_dur = config.COND_POST_WASH if is_prev_cond else self._get_matrix_washout(prev, b)
                         if wash_dur > 0:
                             washouts.append({
-                                "System": b.system,
-                                "Start": prev.mkg_end_dt,
+                                "System": b.system, "Start": prev.mkg_end_dt,
                                 "End": prev.mkg_end_dt + timedelta(minutes=wash_dur),
                                 "Desc": "COND WASH (60m)" if is_prev_cond else "WASHOUT"
                             })
@@ -450,7 +468,7 @@ class TankScheduler:
 
 
 # ---------------------------------------------------------
-# 4. STORAGE ASSIGNER (FAST-RELEASE + UNIVERSAL CIP + DEDICATED TANKS)
+# 4. STORAGE ASSIGNER
 # ---------------------------------------------------------
 class StorageAssigner:
     def __init__(self, tank_snapshot: pd.DataFrame, pst_wo_matrix: dict = None):
@@ -478,7 +496,7 @@ class StorageAssigner:
                 }
 
     def assign_tanks(self, batches: List[ProductionBatch]):
-        print("--- Assigning Storage Tanks (Pkg Start Release + Dedicated Tanks) ---")
+        print("--- Assigning Storage Tanks ---")
         batches.sort(key=lambda x: x.mkg_end_dt)
 
         cond_pref_tanks = ["TK#_25_#", "TK#_26_#", "TK#_27_#", "TK#_28_#"]
@@ -489,7 +507,6 @@ class StorageAssigner:
             tank_freed_at = b.pkg_start_dt
             gcas = str(b.sku_code).strip()
 
-            # --- 1. DEDICATED TANK ROUTING FOR INTERMEDIATES ---
             if gcas == config.GCAS_HC_BASE:
                 b.storage_tank = "HC Base Tank"
                 continue
@@ -519,9 +536,7 @@ class StorageAssigner:
                     wash_time = self.pst_wo_matrix.get((tank_gcas, gcas), 20)
 
                 ready_at = state["available_at"] + timedelta(minutes=wash_time)
-
-                if ready_at > needed_start:
-                    continue
+                if ready_at > needed_start: continue
 
                 score = 0
                 if wash_time == 0 and tank_gcas == gcas:
