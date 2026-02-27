@@ -19,7 +19,8 @@ def upload_to_sql(batches, washouts):
         # --- 1. Production Schedule Table ---
         print("Updating table: production_schedule...")
         cursor.execute("DROP TABLE IF EXISTS production_schedule")
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE production_schedule (
                 batch_id VARCHAR(50) PRIMARY KEY,
                 production_line VARCHAR(50),
@@ -39,30 +40,33 @@ def upload_to_sql(batches, washouts):
                 pkg_start_time DATETIME,
                 pkg_end_time DATETIME
             )
-        """)
+        """
+        )
 
         # Prepare Batch Data
         batch_data = []
         for b in batches:
-            batch_data.append((
-                b.id,
-                b.line,
-                str(b.linked_order),
-                str(b.material),
-                b.desc,
-                str(b.sku_code),
-                b.system,
-                round(b.total_msu, 4),
-                b.tech_type,
-                b.shift,
-                b.mkg_start_dt,
-                b.bct,
-                b.mkg_end_dt,
-                b.buffer_min,
-                b.storage_tank,
-                b.pkg_start_dt,
-                b.pkg_end_dt
-            ))
+            batch_data.append(
+                (
+                    b.id,
+                    b.line,
+                    str(b.linked_order),
+                    str(b.material),
+                    b.desc,
+                    str(b.sku_code),
+                    b.system,
+                    round(b.total_msu, 4),
+                    b.tech_type,
+                    b.shift,
+                    b.mkg_start_dt,
+                    b.bct,
+                    b.mkg_end_dt,
+                    b.buffer_min,
+                    b.storage_tank,
+                    b.pkg_start_dt,
+                    b.pkg_end_dt,
+                )
+            )
 
         if batch_data:
             stmt_batch = """
@@ -76,7 +80,8 @@ def upload_to_sql(batches, washouts):
         # --- 2. UNIVERSAL TIMELINE EVENTS TABLE (NORMALIZED FOR FRONTEND GANTT) ---
         print("Updating table: timeline_events...")
         cursor.execute("DROP TABLE IF EXISTS timeline_events")
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE timeline_events (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 resource_name VARCHAR(50),
@@ -86,37 +91,57 @@ def upload_to_sql(batches, washouts):
                 description VARCHAR(255),
                 event_type VARCHAR(50)
             )
-        """)
+        """
+        )
+        print("Updating table: timeline_data...")
+        cursor.execute("DROP TABLE IF EXISTS timeline_data")
+        cursor.execute(
+            """
+            CREATE TABLE timeline_data (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                resource_name VARCHAR(50),
+                resource_type VARCHAR(50),
+                start_time DATETIME,
+                end_time DATETIME,
+                description VARCHAR(255),
+                event_type VARCHAR(50)
+            )
+        """
+        )
 
         timeline_data = []
 
         # A. MIXING SYSTEM EVENTS (Batches)
         for b in batches:
-            timeline_data.append((
-                b.system,
-                "MIXING_SYSTEM",
-                b.mkg_start_dt,
-                b.mkg_end_dt,
-                f"{b.id}: {b.desc}",
-                "PRODUCTION"
-            ))
+            timeline_data.append(
+                (
+                    b.system,
+                    "MIXING_SYSTEM",
+                    b.mkg_start_dt,
+                    b.mkg_end_dt,
+                    f"{b.id}: {b.desc}",
+                    "PRODUCTION",
+                )
+            )
 
         # B. MIXING SYSTEM WASHOUTS
         for w in washouts:
             evt_type = "SYS_WASHOUT"
-            if "COOLDOWN" in w['Desc'].upper():
+            if "COOLDOWN" in w["Desc"].upper():
                 evt_type = "SYS_COOLDOWN"
-            elif "COND" in w['Desc'].upper():
+            elif "COND" in w["Desc"].upper():
                 evt_type = "SYS_COND_WASH"
 
-            timeline_data.append((
-                w['System'],
-                "MIXING_SYSTEM",
-                w['Start'],
-                w['End'],
-                w['Desc'],
-                evt_type
-            ))
+            timeline_data.append(
+                (
+                    w["System"],
+                    "MIXING_SYSTEM",
+                    w["Start"],
+                    w["End"],
+                    w["Desc"],
+                    evt_type,
+                )
+            )
 
         # C. STORAGE TANK EVENTS (Parsed dynamically from b.storage_tank)
         for b in batches:
@@ -137,24 +162,28 @@ def upload_to_sql(batches, washouts):
                 # Create the Tank Washout Event
                 if w_time > 0:
                     wash_start = b.mkg_end_dt - timedelta(minutes=w_time)
-                    timeline_data.append((
-                        t_name,
-                        "STORAGE_TANK",
-                        wash_start,
-                        b.mkg_end_dt,
-                        f"CIP WASHOUT ({w_time}m)",
-                        "TANK_WASHOUT"
-                    ))
+                    timeline_data.append(
+                        (
+                            t_name,
+                            "STORAGE_TANK",
+                            wash_start,
+                            b.mkg_end_dt,
+                            f"CIP WASHOUT ({w_time}m)",
+                            "TANK_WASHOUT",
+                        )
+                    )
 
                 # Create the Tank Holding Event (Freeing the tank at pkg_start_dt)
-                timeline_data.append((
-                    t_name,
-                    "STORAGE_TANK",
-                    b.mkg_end_dt,
-                    b.pkg_start_dt,
-                    f"{b.id}: {b.desc}",
-                    "TANK_HOLD"
-                ))
+                timeline_data.append(
+                    (
+                        t_name,
+                        "STORAGE_TANK",
+                        b.mkg_end_dt,
+                        b.pkg_start_dt,
+                        f"{b.id}: {b.desc}",
+                        "TANK_HOLD",
+                    )
+                )
 
         if timeline_data:
             stmt_timeline = """
@@ -164,6 +193,15 @@ def upload_to_sql(batches, washouts):
             """
             cursor.executemany(stmt_timeline, timeline_data)
             print(f"Inserted {len(timeline_data)} events into 'timeline_events'.")
+                   
+            stmt_timeline_data = """
+                INSERT INTO timeline_data 
+                (resource_name, resource_type, start_time, end_time, description, event_type) 
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            cursor.executemany(stmt_timeline_data, timeline_data)
+            print(f"Inserted {len(timeline_data)} events into 'timeline_data'.")
+
 
         conn.commit()
         print("SQL Upload Successful.")

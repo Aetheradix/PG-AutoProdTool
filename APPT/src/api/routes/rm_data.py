@@ -15,13 +15,9 @@ class DeadstockUpdate(BaseModel):
 @router.get("/")
 @router.get("")
 async def get_rm_data():
-    """
-    Returns RM data from the database.
-    """
     try:
         engine = get_engine()
         query = text("SELECT * FROM rm_status_data") 
-
         df = pd.read_sql(query, engine)
 
         time_query = text("SELECT MAX(DateandTime) FROM rm_data")
@@ -33,18 +29,15 @@ async def get_rm_data():
 
         df["hex_code"] = np.where(df["status"] == True, "#28a745", "#dc3545")
         
-    
         rename_map = {
             "Perfume1_Tank_Level": "FASCINATING_TANK_LEVEL",
             "Perfume2_Tank_Level": "GIRL_SQUAD_TANK_LEVEL",
             "Perfume3_Tank_Level": "VICTORIA_TANK_LEVEL"
         }
         df["tank_name"] = df["tank_name"].replace(rename_map)
-
-
         df["id"] = df["tank_name"]
 
-        df["unit"] = np.where((df["current_value"] > 100) | (df["deadstock_value"] > 100), "kg", "%")
+        df["unit"] = np.where(df["deadstock_value"] >= 100, "kg", "%")
         df["value_with_unit"] = df["current_value"].round(2).astype(str) + " " + df["unit"]
 
         df = df.replace({np.nan: None, np.inf: None, -np.inf: None})

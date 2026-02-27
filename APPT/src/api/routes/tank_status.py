@@ -34,16 +34,13 @@ async def get_tank_status(
         if not date_cols:
             latest_dt_clause = "NULL"
         else:
-            # Note: GREATEST returns NULL if any argument is NULL.
-            # We use COALESCE to provide a very old date for empty columns.
+            
             date_expressions = [
                 f"COALESCE(NULLIF(`{col}`, ''), '1900-01-01 00:00:00')"
                 for col in date_cols
             ]
             latest_dt_clause = f"GREATEST({', '.join(date_expressions)})"
 
-        # 2. Main query with filtering and cleaning
-        # Using a CTE to handle the latest_dt per Tagname
         query = text(f"""
             WITH CleanedData AS (
                 SELECT 
