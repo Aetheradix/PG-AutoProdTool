@@ -57,13 +57,20 @@ async def get_production_schedule(
         df = pd.read_sql(query, engine, params={"limit": limit, "offset": offset})
         
         # Replace NaN, Inf, -Inf with None for JSON serialization
-        df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
-        data = df.to_dict(orient="records")
+        df = df.replace({np.nan: np.nan, np.inf: np.nan, -np.inf: np.nan}).where(pd.notnull(df), None)
+        
+        # Group by shift and then by system
+        grouped_data = {}
+        if not df.empty:
+            for shift, shift_group in df.groupby('shift'):
+                grouped_data[shift] = {}
+                for system, system_group in shift_group.groupby('system'):
+                    grouped_data[shift][system] = system_group.to_dict(orient="records")
         
         return {
             "status": "success",
             "message": "Production schedule retrieved successfully",
-            "data": data,
+            "data": grouped_data,
             "pagination": {
                 "total_records": total_records,
                 "total_pages": total_pages,
