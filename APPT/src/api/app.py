@@ -12,6 +12,7 @@ from src.api.routes import (
     production_schedule,
     bpr_pdr,
     tank_status,
+    simulation
 )
 
 app = FastAPI(
@@ -49,6 +50,11 @@ app.include_router(
 )
 app.include_router(
     tank_status.router, prefix="/api/v1/tank-status", tags=["Tank Status"]
+)
+app.include_router(
+    simulation.router,
+    prefix="/api/v1/simulation",
+    tags=["Simulation"]
 )
 
 
