@@ -275,22 +275,45 @@ def run_simulation_for_date(file_name, target_date, scheduler, tank_opt, storage
             if not df_sys_timeline.empty: df_sys_timeline.to_excel(writer, sheet_name="System Timeline", index=False)
             if not df_tank_timeline.empty: df_tank_timeline.to_excel(writer, sheet_name="Storage Tank Timeline",
                                                                      index=False)
+            df_bpr_pdr = generate_bpr_pdr_timeline(final_batches)
 
-            workbook = writer.book
-            fmt_wrap = workbook.add_format({'text_wrap': True, 'valign': 'top'})
-            writer.sheets["Schedule"].set_column(0, 20, 15)
-            if "System Timeline" in writer.sheets:
-                ws_sys = writer.sheets["System Timeline"]
-                ws_sys.set_column(0, 0, 18);
-                ws_sys.set_column(1, 1, 8);
-                ws_sys.set_column(2, 4, 40, fmt_wrap)
-            if "Storage Tank Timeline" in writer.sheets:
-                ws_tank = writer.sheets["Storage Tank Timeline"]
-                ws_tank.set_column(0, 0, 18);
-                ws_tank.set_column(1, 1, 8);
-                ws_tank.set_column(2, len(df_tank_timeline.columns) - 1, 25, fmt_wrap)
+            out_name = f"Final_Production_Plan_{target_date.strftime('%Y-%m-%d')}.xlsx"
+            out_path = os.path.join(config.OUTPUT_DIR, out_name)
 
-        print(f"   > SUCCESS: Saved to {out_name}")
+            with pd.ExcelWriter(out_path, engine='xlsxwriter') as writer:
+                df_main.to_excel(writer, sheet_name="Schedule", index=False)
+                if not df_sys_timeline.empty: df_sys_timeline.to_excel(writer, sheet_name="System Timeline",
+                                                                       index=False)
+                if not df_tank_timeline.empty: df_tank_timeline.to_excel(writer, sheet_name="Storage Tank Timeline",
+                                                                         index=False)
+
+                # --- ADD THE NEW SHEET HERE ---
+                if not df_bpr_pdr.empty: df_bpr_pdr.to_excel(writer, sheet_name="BPR-PDR", index=False)
+
+                workbook = writer.book
+                fmt_wrap = workbook.add_format({'text_wrap': True, 'valign': 'top'})
+                writer.sheets["Schedule"].set_column(0, 20, 15)
+
+                if "System Timeline" in writer.sheets:
+                    ws_sys = writer.sheets["System Timeline"]
+                    ws_sys.set_column(0, 0, 18);
+                    ws_sys.set_column(1, 1, 8);
+                    ws_sys.set_column(2, 4, 40, fmt_wrap)
+                if "Storage Tank Timeline" in writer.sheets:
+                    ws_tank = writer.sheets["Storage Tank Timeline"]
+                    ws_tank.set_column(0, 0, 18);
+                    ws_tank.set_column(1, 1, 8);
+                    ws_tank.set_column(2, len(df_tank_timeline.columns) - 1, 25, fmt_wrap)
+                # You can format the new BPR sheet slightly to make it readable
+                if "BPR-PDR" in writer.sheets:
+                    ws_bpr = writer.sheets["BPR-PDR"]
+                    ws_bpr.set_column(1, 1, 12);
+                    ws_bpr.set_column(2, 2, 15);
+                    ws_bpr.set_column(4, 4, 30, fmt_wrap)
+                    ws_bpr.set_column(7, 8, 20);
+                    ws_bpr.set_column(11, 13, 20)
+
+            print(f"   > SUCCESS: Saved to {out_name}")
 
     return final_batches, washouts, scheduler.next_batch_id
 
@@ -357,6 +380,23 @@ def main():
     print(f"Total Runtime: {int(duration // 60)}m {duration % 60:.2f}s")
     print("=" * 40)
 
+def generate_bpr_pdr_timeline(batches):
+    import pandas as pd
+    data = []
+    for i, b in enumerate(batches, 1):
+        data.append({
+            "Sr.No": i,
+            "Date": b.mkg_start_dt.strftime("%d-%b-%y"),
+            "Batch No": b.id,
+            "FC GCAS": b.sku_code,
+            "Bulk Description": b.desc,
+            "Line": b.line,
+            "Mkg System": b.system,
+            "Issued By Date/Sign/ Time": "",
+            "Issued To  Date/Sign/ Time": "",
+            "P Code": b.material
+        })
+    return pd.DataFrame(data)
 
 if __name__ == "__main__":
     main()
