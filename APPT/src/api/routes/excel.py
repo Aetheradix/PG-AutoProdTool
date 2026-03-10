@@ -1,12 +1,13 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Depends
 from typing import List, Dict, Any
 import pandas as pd
 import os
 from src import config
+from src.auth import admin_required
 
 router = APIRouter()
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(admin_required)])
 async def upload_excel_data(data: List[Dict[str, Any]] = Body(...)):
     """
     Receive edited Excel data from the frontend and save it as an Excel file.

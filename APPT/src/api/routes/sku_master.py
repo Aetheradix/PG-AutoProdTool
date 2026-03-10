@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Optional
 from src.db import get_engine
+from src.auth import any_user, admin_required
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
@@ -36,8 +37,7 @@ class SKUMasterCreate(SKUMasterUpdate):
     gcas: str
 
 
-@router.get("/")
-@router.get("")
+@router.get("", dependencies=[Depends(any_user)])
 async def get_sku_master(
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
@@ -81,8 +81,7 @@ async def get_sku_master(
         )
 
 
-@router.post("/")
-@router.post("")
+@router.post("", dependencies=[Depends(admin_required)])
 async def create_sku_master(data: SKUMasterCreate):
     """
     Creates a new SKU master record in the database.
@@ -120,8 +119,8 @@ async def create_sku_master(data: SKUMasterCreate):
         )
 
 
-@router.put("/{gcas}")
-@router.patch("/{gcas}")
+@router.put("/{gcas}", dependencies=[Depends(admin_required)])
+@router.patch("/{gcas}", dependencies=[Depends(admin_required)])
 async def update_sku_master(gcas: str, update_data: SKUMasterUpdate):
     """
     Updates a SKU master record in the database. Supports PUT and PATCH.
@@ -163,7 +162,7 @@ async def update_sku_master(gcas: str, update_data: SKUMasterUpdate):
         )
 
 
-@router.delete("/{gcas}")
+@router.delete("/{gcas}", dependencies=[Depends(admin_required)])
 async def delete_sku_master(gcas: str):
     """
     Deletes a SKU master record from the database.

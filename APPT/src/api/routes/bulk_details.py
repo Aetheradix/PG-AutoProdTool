@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from src.db import get_engine
+from src.auth import any_user, admin_required
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
@@ -22,8 +23,7 @@ class BulkDetailsUpdate(BaseModel):
     weight_per_container_kg: Optional[float] = None
 
 
-@router.get("/")
-@router.get("")
+@router.get("", dependencies=[Depends(any_user)])
 async def get_bulk_details(
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
@@ -68,8 +68,7 @@ class BulkDetailsCreate(BulkDetailsUpdate):
     p_code: str
 
 
-@router.post("/")
-@router.post("")
+@router.post("", dependencies=[Depends(admin_required)])
 async def create_bulk_details(data: BulkDetailsCreate):
     """
     Creates a new bulk detail record in the database.
@@ -102,9 +101,9 @@ async def create_bulk_details(data: BulkDetailsCreate):
         )
 
 
-@router.put("/{id}")
-@router.patch("/{id}")
-@router.post("/{id}")
+@router.put("/{id}", dependencies=[Depends(admin_required)])
+@router.patch("/{id}", dependencies=[Depends(admin_required)])
+@router.post("/{id}", dependencies=[Depends(admin_required)])
 async def update_bulk_details(id: int, update_data: BulkDetailsUpdate):
     """
     Updates a bulk detail record in the database. Supports PUT, PATCH, and POST for compatibility.
@@ -146,7 +145,7 @@ async def update_bulk_details(id: int, update_data: BulkDetailsUpdate):
         )
 
 
-@router.delete("/{id}")
+@router.delete("/{id}", dependencies=[Depends(admin_required)])
 async def delete_bulk_details(id: int):
     """
     Deletes a bulk detail record from the database.
