@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from src.db import get_engine
+from src.auth import any_user
 from sqlalchemy import text
 import pandas as pd
 from typing import Dict, Any

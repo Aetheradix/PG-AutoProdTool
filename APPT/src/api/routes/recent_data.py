@@ -1,11 +1,12 @@
 """
 Recent data API routes for querying production batches.
 """
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from typing import Optional, List, Dict, Any
 import pandas as pd
 from sqlalchemy import text
 from src.db import get_engine
+from src.auth import any_user
 
 
 
@@ -13,7 +14,7 @@ from src.db import get_engine
 router = APIRouter()
 
 
-@router.get("/recent-data")
+@router.get("/recent-data", dependencies=[Depends(any_user)])
 async def get_recent_data(
     limit: int = Query(default=10, ge=1, le=100, description="Number of records to return"),
 ) -> Dict[str, Any]:

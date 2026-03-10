@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 from src.db import get_engine
+from src.auth import any_user, admin_required
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
@@ -33,8 +34,7 @@ class ProductionScheduleCreate(ProductionScheduleUpdate):
     batch_id: str
 
 
-@router.get("/")
-@router.get("")
+@router.get("", dependencies=[Depends(any_user)])
 async def get_production_schedule(
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
@@ -85,8 +85,7 @@ async def get_production_schedule(
         )
 
 
-@router.post("/")
-@router.post("")
+@router.post("", dependencies=[Depends(admin_required)])
 async def create_production_schedule(data: ProductionScheduleCreate):
     """
     Creates a new production schedule record in the database.
@@ -123,8 +122,8 @@ async def create_production_schedule(data: ProductionScheduleCreate):
         )
 
 
-@router.put("/{batch_id}")
-@router.patch("/{batch_id}")
+@router.put("/{batch_id}", dependencies=[Depends(admin_required)])
+@router.patch("/{batch_id}", dependencies=[Depends(admin_required)])
 async def update_production_schedule(batch_id: str, update_data: ProductionScheduleUpdate):
     """
     Updates a production schedule record in the database.
@@ -166,7 +165,7 @@ async def update_production_schedule(batch_id: str, update_data: ProductionSched
         )
 
 
-@router.delete("/{batch_id}")
+@router.delete("/{batch_id}", dependencies=[Depends(admin_required)])
 async def delete_production_schedule(batch_id: str):
     """
     Deletes a production schedule record from the database.

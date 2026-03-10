@@ -12,7 +12,8 @@ from src.api.routes import (
     production_schedule,
     bpr_pdr,
     tank_status,
-    simulation
+    simulation,
+    auth
 )
 
 app = FastAPI(
@@ -30,7 +31,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
+
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(rm_data.router, prefix="/api/v1/rm-data", tags=["RM Data"])
 app.include_router(status.router, prefix="/api/v1", tags=["Status"])
 app.include_router(recent_data.router, prefix="/api/v1", tags=["Recent Data"])

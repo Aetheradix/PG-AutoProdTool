@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel
 from src.db import get_engine
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
 from typing import Optional
+from src.auth import any_user, admin_required
 
 router = APIRouter()
 
@@ -13,7 +14,7 @@ class DeadstockUpdate(BaseModel):
     deadstock_value: Optional[float] = None
 
 @router.get("/")
-@router.get("")
+@router.get("", dependencies=[Depends(any_user)])
 async def get_rm_data():
     try:
         engine = get_engine()
@@ -52,11 +53,11 @@ async def get_rm_data():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/{id}")
-@router.patch("/{id}")
-@router.post("/update-deadstock")
-@router.post("/")
-@router.post("")
+@router.put("/{id}", dependencies=[Depends(admin_required)])
+@router.patch("/{id}", dependencies=[Depends(admin_required)])
+@router.post("/update-deadstock", dependencies=[Depends(admin_required)])
+@router.post("/", dependencies=[Depends(admin_required)])
+@router.post("", dependencies=[Depends(admin_required)])
 async def update_deadstock(data: DeadstockUpdate, id: Optional[str] = None):
     """
     Updates deadstock_value for a specific tank in rm_status_data.

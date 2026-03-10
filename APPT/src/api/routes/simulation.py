@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime
+from src.auth import admin_required
 import pandas as pd
 
 from src import config, db
@@ -18,7 +19,7 @@ class SimulationRequest(BaseModel):
     target_date: str  # Expected format: "YYYY-MM-DD"
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(admin_required)])
 def run_simulation_api(request: SimulationRequest):
     try:
         # 1. Parse Frontend Date

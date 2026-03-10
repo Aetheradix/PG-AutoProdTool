@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from src.db import get_engine
+from src.auth import any_user, admin_required
 from sqlalchemy import text
 import pandas as pd
 import numpy as np
@@ -71,7 +72,7 @@ async def get_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/ghantt-chart")
+@router.get("/ghantt-chart", dependencies=[Depends(any_user)])
 async def timeline_event(limit: int = Query(default=100, ge=1, le=1000)):
     """
     Returns timeline event data for Gantt chart representation.
@@ -108,7 +109,7 @@ async def timeline_event(limit: int = Query(default=100, ge=1, le=1000)):
         raise HTTPException(status_code=500, detail=str(e))
     
 
-@router.get("/timeline-data")
+@router.get("/timeline-data", dependencies=[Depends(any_user)])
 async def get_timeline_data(limit: int = Query(default=100, ge=1, le=1000)):
     """
     Returns timeline event data for Gantt chart representation.
@@ -145,7 +146,7 @@ async def get_timeline_data(limit: int = Query(default=100, ge=1, le=1000)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/timeline-data/{event_id}")
+@router.put("/timeline-data/{event_id}", dependencies=[Depends(admin_required)])
 async def update_timeline_data(event_id: int, payload: dict):
     """
     Updates the start_time and end_time of a timeline event.
