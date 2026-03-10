@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer
 from datetime import timedelta
 from sqlalchemy import text
 from src.db import get_engine
@@ -19,24 +19,34 @@ router = APIRouter()
 class UserCreate(BaseModel):
     username: str
     password: str
+    full_name: str = ""
+    email: str = ""
     role: str = "user"
 
-class UserUpdateRole(BaseModel):
-    role: str
+class UserUpdate(BaseModel):
+    full_name: str = None
+    email: str = None
+    role: str = None
+    is_active: bool = None
+    is_admin: bool = None
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 @router.post("/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(login_data: LoginRequest):
     engine = get_engine()
     with engine.connect() as conn:
         result = conn.execute(
-            text("SELECT username, password_hash, role FROM users WHERE username = :username"),
-            {"username": form_data.username}
+            text("SELECT username, password_hash, role, full_name, email FROM users WHERE email = :email"),
+            {"email": login_data.email}
         ).fetchone()
         
-        if not result or not verify_password(form_data.password, result[1]):
+        if not result or not verify_password(login_data.password, result[1]):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
+                detail="Incorrect email or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
@@ -49,7 +59,10 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         return {
             "access_token": access_token, 
             "token_type": "bearer",
-            "role": result[2] 
+            "role": result[2],
+            "username": result[0],
+            "full_name": result[3],
+            "email": result[4]
         }
 
 @router.get("/me")
@@ -71,8 +84,14 @@ async def signup(user_data: UserCreate):
         
         pwd_hash = get_password_hash(user_data.password)
         conn.execute(
-            text("INSERT INTO users (username, password_hash, role) VALUES (:username, :password_hash, :role)"),
-            {"username": user_data.username, "password_hash": pwd_hash, "role": user_data.role}
+            text("INSERT INTO users (username, password_hash, full_name, email, role) VALUES (:username, :password_hash, :full_name, :email, :role)"),
+            {
+                "username": user_data.username, 
+                "password_hash": pwd_hash, 
+                "full_name": user_data.full_name,
+                "email": user_data.email,
+                "role": user_data.role
+            }
         )
     return {"message": "User created successfully"}
 
@@ -80,24 +99,53 @@ async def signup(user_data: UserCreate):
 async def list_users():
     engine = get_engine()
     with engine.connect() as conn:
-        result = conn.execute(text("SELECT id, username, role FROM users")).fetchall()
-        return [{"id": r[0], "username": r[1], "role": r[2]} for r in result]
+        result = conn.execute(text("SELECT id, username, full_name, email, is_active, is_admin, role FROM users")).fetchall()
+        return [
+            {
+                "id": r[0], 
+                "username": r[1], 
+                "full_name": r[2], 
+                "email": r[3], 
+                "is_active": bool(r[4]), 
+                "is_admin": bool(r[5]), 
+                "role": r[6]
+            } for r in result
+        ]
 
-@router.patch("/users/{user_id}/role", dependencies=[Depends(admin_required)])
-async def update_user_role(user_id: int, role_data: UserUpdateRole):
-    if role_data.role not in ["admin", "user"]:
-        raise HTTPException(status_code=400, detail="Invalid role")
+@router.patch("/users/{user_id}", dependencies=[Depends(admin_required)])
+async def update_user(user_id: int, user_data: UserUpdate):
+    update_fields = []
+    params = {"user_id": user_id}
+    
+    if user_data.full_name is not None:
+        update_fields.append("full_name = :full_name")
+        params["full_name"] = user_data.full_name
+    if user_data.email is not None:
+        update_fields.append("email = :email")
+        params["email"] = user_data.email
+    if user_data.role is not None:
+        if user_data.role not in ["admin", "user"]:
+            raise HTTPException(status_code=400, detail="Invalid role")
+        update_fields.append("role = :role")
+        params["role"] = user_data.role
+    if user_data.is_active is not None:
+        update_fields.append("is_active = :is_active")
+        params["is_active"] = 1 if user_data.is_active else 0
+    if user_data.is_admin is not None:
+        update_fields.append("is_admin = :is_admin")
+        params["is_admin"] = 1 if user_data.is_admin else 0
+        
+    if not update_fields:
+        return {"message": "No fields to update"}
         
     engine = get_engine()
     with engine.begin() as conn:
-        result = conn.execute(
-            text("UPDATE users SET role = :role WHERE id = :user_id"),
-            {"role": role_data.role, "user_id": user_id}
-        )
+        query = text(f"UPDATE users SET {', '.join(update_fields)} WHERE id = :user_id")
+        result = conn.execute(query, params)
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="User not found")
             
-    return {"message": f"User role updated to {role_data.role}"}
+    return {"message": "User updated successfully"}
 
 @router.delete("/users/{user_id}", dependencies=[Depends(admin_required)])
 async def delete_user(user_id: int, current_user: dict = Depends(get_current_user)):
