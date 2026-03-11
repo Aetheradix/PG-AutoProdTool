@@ -254,18 +254,26 @@ class Scheduler:
             actual_buffer = int((d.pkg_start_dt - final_mkg_end).total_seconds() / 60)
 
             shift = self._get_shift(final_mkg_start)
+
+            # --- EXTRACT TECH TYPE FROM MASTER DATA ---
             tech_type = "Single"
-            if sku: tech_type = sku.tech_class
+            if sku:
+                val = getattr(sku, 'tech_class', None)
+                if val and str(val).strip().lower() not in ['nan', 'none', '']:
+                    tech_type = str(val).strip().title()
+
+            # --- SEPARATE TANK CONFIG LOGIC ---
+            tank_config_val = "FMT+MMT" if "Dual" in tech_type else "FMT"
 
             # --- DYNAMIC BATCH IDENTIFIERS ---
             if "Replenishment" in d.description:
-                # Replenishments get a distinct tracker so they don't eat standard batch IDs
                 bid = f"REP{rep_counter:02d}-{date_str}"
                 rep_counter += 1
             else:
                 bid = current_bid
                 current_bid = self._generate_next_batch_id(current_bid)
 
+            # Keep 'system' pure (12T/6T) and create the batch
             batch = ProductionBatch(
                 id=bid, sku_code=gcas, system=system, shift=shift,
                 mkg_start_dt=final_mkg_start, bct=int(bct),
@@ -274,9 +282,12 @@ class Scheduler:
                 linked_order=d.order_id, material=d.material_code,
                 desc=bulk_desc, total_msu=msu, line=d.line, tech_type=tech_type
             )
+
+            # Safely attach the new configuration attribute
+            batch.tank_config = tank_config_val
+
             self.batches.append(batch)
 
-        # Store the next available ID so the main loop can grab it for tomorrow!
         self.next_batch_id = current_bid
         return self.batches
 

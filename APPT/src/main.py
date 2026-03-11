@@ -231,12 +231,25 @@ def main():
         data = []
         for b in final_batches:
             data.append({
-                "Production Line": b.line, "Order": b.linked_order, "Material": b.material,
-                "Description": b.desc, "Batch ID": b.id, "GCAS": b.sku_code,
-                "System": b.system, "Total MSU": round(b.total_msu, 4), "Tech Type": b.tech_type,
-                "Shift": b.shift, "Mkg Start Time": b.mkg_start_dt, "BCT (min)": b.bct,
-                "Mkg End Time": b.mkg_end_dt, "Buffer (min)": b.buffer_min, "Storage Tank": b.storage_tank,
-                "Pkg Start Time": b.pkg_start_dt, "Pkg End Time": b.pkg_end_dt, "MRP Status": b.mrp_status
+                "Production Line": b.line,
+                "Order": b.linked_order,
+                "Material": b.material,
+                "Description": b.desc,
+                "Batch ID": b.id,
+                "GCAS": b.sku_code,
+                "System": b.system,
+                "Tank Config": getattr(b, 'tank_config', 'FMT'),  # NEW COLUMN
+                "Total MSU": round(b.total_msu, 4),
+                "Tech Type": b.tech_type,
+                "Shift": b.shift,
+                "Mkg Start Time": b.mkg_start_dt,
+                "BCT (min)": b.bct,
+                "Mkg End Time": b.mkg_end_dt,
+                "Buffer (min)": b.buffer_min,
+                "Storage Tank": b.storage_tank,
+                "Pkg Start Time": b.pkg_start_dt,
+                "Pkg End Time": b.pkg_end_dt,
+                "MRP Status": b.mrp_status
             })
 
         df_main = pd.DataFrame(data)
