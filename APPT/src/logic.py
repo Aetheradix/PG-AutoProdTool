@@ -262,6 +262,13 @@ class Scheduler:
                 if val and str(val).strip().lower() not in ['nan', 'none', '']:
                     tech_type = str(val).strip().title()
 
+            # --- CONDITIONER FAILSAFE ---
+            # Force all conditioners to be 'Dual' (FMT+MMT) even if the database is blank
+            desc_lower = str(d.description).lower()
+            is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
+            if is_cond:
+                tech_type = "Dual"
+
             # --- SEPARATE TANK CONFIG LOGIC ---
             tank_config_val = "FMT+MMT" if "Dual" in tech_type else "FMT"
 

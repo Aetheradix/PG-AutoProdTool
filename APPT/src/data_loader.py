@@ -50,21 +50,39 @@ class DataLoader:
         return variant_map
 
     def load_master_data(self) -> Dict[str, SKUMeta]:
+        import pandas as pd
+
         print(f"Loading Master SKU & Recipe Data from SQL (sku_master)...")
         df = db.fetch_table("sku_master")
-        if df.empty: return {}
+        if df is None or df.empty: return {}
+
+        # 1. BULLETPROOF THE COLUMNS: Make everything lowercase and replace spaces with underscores
+        df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
+
         sku_map = {}
 
-        # Identify recipe columns dynamically or static list
-        # We look for cols starting with 'cons_'
+        # Identify recipe columns dynamically
         recipe_cols = [c for c in df.columns if str(c).startswith('cons_')]
 
         for _, row in df.iterrows():
             gcas = self._clean_gcas(row.get('gcas'))
             if not gcas: continue
+
             desc = str(row.get('description', '')).strip()
             tech = str(row.get('technology', '')).strip()
-            tech_class = str(row.get('tech_class', 'Single')).strip()
+
+            # 2. SMART TECH CLASS EXTRACTION
+            raw_tech_class = row.get('tech_class')
+            tc_str = str(raw_tech_class).strip().lower()
+
+            # If it's a NaN, null, or blank string, default to Single
+            if pd.isna(raw_tech_class) or tc_str in ['nan', 'none', '', 'null']:
+                tech_class = "Single"
+            # If the database says "dual", "fmt+mmt", or "mmt", flag it as Dual!
+            elif "dual" in tc_str or "mmt" in tc_str or "+" in tc_str:
+                tech_class = "Dual"
+            else:
+                tech_class = "Single"
 
             bct_map = {}
             val_12t_fmt = float(row.get('bct_12t_fmt') or 0)
@@ -84,17 +102,17 @@ class DataLoader:
                 if val > 0:
                     # Clean key: 'cons_12t_sls' -> '12T_sls'
                     key = col.replace('cons_', '')
-                    # If col is 'cons_12t_sls', key becomes '12t_sls'
                     recipes[key.lower()] = val
 
             sku_map[gcas] = SKUMeta(
                 gcas=gcas,
                 description=desc,
                 technology=tech,
-                tech_class=tech_class,
+                tech_class=tech_class,  # Safely cleaned and standardized!
                 bct_by_system=bct_map,
                 recipes=recipes
             )
+
         return sku_map
 
     def load_packing_plan(self) -> List[Demand]:

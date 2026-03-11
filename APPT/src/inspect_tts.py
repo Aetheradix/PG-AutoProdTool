@@ -1,57 +1,83 @@
-import sys
+#this utility is to update Tech Class for the master data
 import os
+import sys
 import pandas as pd
+from sqlalchemy import text
 
-
-# --- PATH SETUP ---
+# Setup Path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-from src import db
 
-def main():
-    print("--- INSPECTING STORAGE TANK TABLES ---")
-    conn = db.get_connection()
-    if not conn:
-        print("DB Connection Failed.")
+from src import db
+from src import config
+
+
+def fix_master_data_in_sql():
+    # Construct the exact path
+    excel_path = os.path.join(project_root, "data", "input", "Master Data - Test.xlsx")
+
+    print(f"Reading {excel_path}...")
+    try:
+        df = pd.read_excel(excel_path, sheet_name='Master Data', header=0)
+    except Exception as e:
+        print(f"Error reading Excel: {e}")
         return
 
-    # 1. Inspect Colour Status Master
-    print("\nFetching 'colour_status_master'...")
-    try:
-        # Use simple query
-        df_colors = pd.read_sql("SELECT * FROM colour_status_master", conn)
-        if not df_colors.empty:
-            print(df_colors.to_string())
-        else:
-            print("Table 'colour_status_master' is empty.")
-    except Exception as e:
-        print(f"Error reading colour_status_master: {e}")
+    if 'Single/ Dual' not in df.columns or 'GCAS' not in df.columns:
+        print("Error: Could not find 'Single/ Dual' or 'GCAS' columns.")
+        return
 
-    # 2. Inspect TTS Raw Data (Latest entries)
-    print("\nFetching latest 10 rows from 'tts_raw_data'...")
-    try:
-        # Get latest 10 rows to see structure
-        df_tts = pd.read_sql("SELECT * FROM tts_raw_data ORDER BY ID DESC LIMIT 10", conn)
+    # Forward-fill: copies the value down through the blank merged rows
+    df['Single/ Dual'] = df['Single/ Dual'].ffill()
 
-        if not df_tts.empty:
-            print("Columns:", df_tts.columns.tolist())
-            print(df_tts.to_string())
+    engine = db.get_engine()
+    if not engine:
+        print("Database connection failed.")
+        return
 
-            # Check distinct Tagnames to identify the tanks
-            print("\nDistinct Tagnames (Storage Tanks):")
-            df_distinct = pd.read_sql("SELECT DISTINCT Tagname FROM tts_raw_data", conn)
-            print(df_distinct['Tagname'].tolist())
+    print("Connected to DB. Force-updating sku_master table...\n")
 
-        else:
-            print("[WARN] 'tts_raw_data' is empty.")
+    with engine.begin() as conn:
+        total_matched = 0
 
-    except Exception as e:
-        print(f"Error reading tts_raw_data: {e}")
+        for _, row in df.iterrows():
+            # 1. Clean the GCAS
+            raw_gcas = str(row.get('GCAS', ''))
 
-    conn.close()
+            if raw_gcas.endswith('.0'):
+                raw_gcas = raw_gcas[:-2]
+            gcas = raw_gcas.strip()
+
+            # Skip empty rows
+            if not gcas or gcas.lower() == 'nan':
+                continue
+
+            # 2. Extract the true Tech Class value without the strict filter
+            raw_tech = str(row.get('Single/ Dual', '')).strip()
+
+            # If it's completely blank in Excel, default to Single
+            if not raw_tech or raw_tech.lower() == 'nan':
+                final_tech = "Single"
+            else:
+                # Uppercase it for clean formatting (e.g., "3t mmt" -> "3T MMT")
+                final_tech = raw_tech.upper()
+
+                # Standardize capitalization for the core two types to match React frontend
+                if final_tech == 'SINGLE': final_tech = 'Single'
+                if final_tech == 'DUAL': final_tech = 'Dual'
+
+            # 3. Execute and track actual SQL changes
+            query = text("UPDATE sku_master SET tech_class = :tech WHERE gcas = :gcas")
+            result = conn.execute(query, {"tech": final_tech, "gcas": gcas})
+
+            if result.rowcount > 0:
+                total_matched += result.rowcount
+                print(f"   [SUCCESS] Updated GCAS {gcas} -> {final_tech}")
+
+    print(f"\nFINISHED: Successfully modified {total_matched} rows in the database!")
 
 
 if __name__ == "__main__":
-    main()
+    fix_master_data_in_sql()
