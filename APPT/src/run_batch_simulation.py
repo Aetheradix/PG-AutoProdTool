@@ -207,6 +207,24 @@ def generate_tank_storage_timeline(batches):
     return pd.DataFrame(timeline)
 
 
+def generate_bpr_pdr_timeline(batches):
+    data = []
+    for i, b in enumerate(batches, 1):
+        data.append({
+            "Sr.No": i,
+            "Date": b.mkg_start_dt.strftime("%d-%b-%y"),
+            "Batch No": b.id,
+            "FC GCAS": b.sku_code,
+            "Bulk Description": b.desc,
+            "Line": b.line,
+            "Mkg System": b.system,
+            "Issued By Date/Sign/ Time": "",
+            "Issued To  Date/Sign/ Time": "",
+            "P Code": b.material
+        })
+    return pd.DataFrame(data)
+
+
 # --- THE CONTINUOUS ENGINE ---
 def run_simulation_for_date(file_name, target_date, scheduler, tank_opt, storage_assigner, mrp_planner, pst_wo_matrix,
                             current_batch_seed):
@@ -229,7 +247,6 @@ def run_simulation_for_date(file_name, target_date, scheduler, tank_opt, storage
     washouts = []
 
     for i in range(3):
-        # We pass the persistent seed ID here so it picks up right where it left off
         raw_batches = scheduler.run_initial_schedule(demands, target_date=target_date,
                                                      start_batch_id=current_batch_seed)
         cur_batches, cur_washouts = tank_opt.optimize(raw_batches, target_date=target_date)
@@ -255,65 +272,68 @@ def run_simulation_for_date(file_name, target_date, scheduler, tank_opt, storage
         data = []
         for b in final_batches:
             data.append({
-                "Production Line": b.line, "Order": b.linked_order, "Material": b.material,
-                "Description": b.desc, "Batch ID": b.id, "GCAS": b.sku_code,
-                "System": b.system, "Total MSU": round(b.total_msu, 4), "Tech Type": b.tech_type,
-                "Shift": b.shift, "Mkg Start Time": b.mkg_start_dt, "BCT (min)": b.bct,
-                "Mkg End Time": b.mkg_end_dt, "Buffer (min)": b.buffer_min, "Storage Tank": b.storage_tank,
-                "Pkg Start Time": b.pkg_start_dt, "Pkg End Time": b.pkg_end_dt, "MRP Status": b.mrp_status
+                "Production Line": b.line,
+                "Order": b.linked_order,
+                "Material": b.material,
+                "Description": b.desc,
+                "Batch ID": b.id,
+                "GCAS": b.sku_code,
+                "System": b.system,
+                "Tank Config": getattr(b, 'tank_config', 'FMT'),
+                "Total MSU": round(b.total_msu, 4),
+                "Tech Type": b.tech_type,
+                "Shift": b.shift,
+                "Mkg Start Time": b.mkg_start_dt,
+                "BCT (min)": b.bct,
+                "Mkg End Time": b.mkg_end_dt,
+                "Buffer (min)": b.buffer_min,
+                "Storage Tank": b.storage_tank,
+                "Pkg Start Time": b.pkg_start_dt,
+                "Pkg End Time": b.pkg_end_dt,
+                "MRP Status": b.mrp_status
             })
 
         df_main = pd.DataFrame(data)
         df_sys_timeline = generate_system_timeline_data(final_batches, washouts)
         df_tank_timeline = generate_tank_storage_timeline(final_batches)
+        df_bpr_pdr = generate_bpr_pdr_timeline(final_batches)
 
         out_name = f"Final_Production_Plan_{target_date.strftime('%Y-%m-%d')}.xlsx"
         out_path = os.path.join(config.OUTPUT_DIR, out_name)
 
         with pd.ExcelWriter(out_path, engine='xlsxwriter') as writer:
             df_main.to_excel(writer, sheet_name="Schedule", index=False)
-            if not df_sys_timeline.empty: df_sys_timeline.to_excel(writer, sheet_name="System Timeline", index=False)
-            if not df_tank_timeline.empty: df_tank_timeline.to_excel(writer, sheet_name="Storage Tank Timeline",
-                                                                     index=False)
-            df_bpr_pdr = generate_bpr_pdr_timeline(final_batches)
 
-            out_name = f"Final_Production_Plan_{target_date.strftime('%Y-%m-%d')}.xlsx"
-            out_path = os.path.join(config.OUTPUT_DIR, out_name)
+            if not df_sys_timeline.empty:
+                df_sys_timeline.to_excel(writer, sheet_name="System Timeline", index=False)
+            if not df_tank_timeline.empty:
+                df_tank_timeline.to_excel(writer, sheet_name="Storage Tank Timeline", index=False)
+            if not df_bpr_pdr.empty:
+                df_bpr_pdr.to_excel(writer, sheet_name="BPR-PDR", index=False)
 
-            with pd.ExcelWriter(out_path, engine='xlsxwriter') as writer:
-                df_main.to_excel(writer, sheet_name="Schedule", index=False)
-                if not df_sys_timeline.empty: df_sys_timeline.to_excel(writer, sheet_name="System Timeline",
-                                                                       index=False)
-                if not df_tank_timeline.empty: df_tank_timeline.to_excel(writer, sheet_name="Storage Tank Timeline",
-                                                                         index=False)
+            workbook = writer.book
+            fmt_wrap = workbook.add_format({'text_wrap': True, 'valign': 'top'})
+            writer.sheets["Schedule"].set_column(0, 20, 15)
 
-                # --- ADD THE NEW SHEET HERE ---
-                if not df_bpr_pdr.empty: df_bpr_pdr.to_excel(writer, sheet_name="BPR-PDR", index=False)
+            if "System Timeline" in writer.sheets:
+                ws_sys = writer.sheets["System Timeline"]
+                ws_sys.set_column(0, 0, 18)
+                ws_sys.set_column(1, 1, 8)
+                ws_sys.set_column(2, 4, 40, fmt_wrap)
 
-                workbook = writer.book
-                fmt_wrap = workbook.add_format({'text_wrap': True, 'valign': 'top'})
-                writer.sheets["Schedule"].set_column(0, 20, 15)
+            if "Storage Tank Timeline" in writer.sheets:
+                ws_tank = writer.sheets["Storage Tank Timeline"]
+                ws_tank.set_column(0, 0, 18)
+                ws_tank.set_column(1, 1, 8)
+                ws_tank.set_column(2, len(df_tank_timeline.columns) - 1, 25, fmt_wrap)
 
-                if "System Timeline" in writer.sheets:
-                    ws_sys = writer.sheets["System Timeline"]
-                    ws_sys.set_column(0, 0, 18);
-                    ws_sys.set_column(1, 1, 8);
-                    ws_sys.set_column(2, 4, 40, fmt_wrap)
-                if "Storage Tank Timeline" in writer.sheets:
-                    ws_tank = writer.sheets["Storage Tank Timeline"]
-                    ws_tank.set_column(0, 0, 18);
-                    ws_tank.set_column(1, 1, 8);
-                    ws_tank.set_column(2, len(df_tank_timeline.columns) - 1, 25, fmt_wrap)
-                # You can format the new BPR sheet slightly to make it readable
-                if "BPR-PDR" in writer.sheets:
-                    ws_bpr = writer.sheets["BPR-PDR"]
-                    ws_bpr.set_column(1, 1, 12);
-                    ws_bpr.set_column(2, 2, 15);
-                    ws_bpr.set_column(4, 4, 30, fmt_wrap)
-                    ws_bpr.set_column(7, 8, 20);
-                    ws_bpr.set_column(11, 13, 20)
+            if "BPR-PDR" in writer.sheets:
+                ws_bpr = writer.sheets["BPR-PDR"]
+                ws_bpr.set_column(1, 1, 12)
+                ws_bpr.set_column(2, 2, 15)
+                ws_bpr.set_column(4, 4, 30, fmt_wrap)
 
-            print(f"   > SUCCESS: Saved to {out_name}")
+        print(f"   > SUCCESS: Saved to {out_name}")
 
     return final_batches, washouts, scheduler.next_batch_id
 
@@ -355,7 +375,6 @@ def main():
     all_month_batches = []
     all_month_washouts = []
 
-    # We initialize our custom counter here
     current_batch_seed = "CI400"
 
     for fname in TARGET_FILES:
@@ -367,7 +386,6 @@ def main():
             all_month_batches.extend(day_batches)
             all_month_washouts.extend(day_washouts)
 
-            # Lock in the final batch ID state for the next day!
             current_batch_seed = next_seed
 
     print(f"\n--- Uploading Full Month Data to SQL ({len(all_month_batches)} total batches) ---")
@@ -380,23 +398,6 @@ def main():
     print(f"Total Runtime: {int(duration // 60)}m {duration % 60:.2f}s")
     print("=" * 40)
 
-def generate_bpr_pdr_timeline(batches):
-    import pandas as pd
-    data = []
-    for i, b in enumerate(batches, 1):
-        data.append({
-            "Sr.No": i,
-            "Date": b.mkg_start_dt.strftime("%d-%b-%y"),
-            "Batch No": b.id,
-            "FC GCAS": b.sku_code,
-            "Bulk Description": b.desc,
-            "Line": b.line,
-            "Mkg System": b.system,
-            "Issued By Date/Sign/ Time": "",
-            "Issued To  Date/Sign/ Time": "",
-            "P Code": b.material
-        })
-    return pd.DataFrame(data)
 
 if __name__ == "__main__":
     main()
