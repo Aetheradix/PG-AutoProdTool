@@ -34,7 +34,74 @@ class ProductionScheduleCreate(ProductionScheduleUpdate):
     batch_id: str
 
 
-@router.get("", dependencies=[Depends(any_user)])
+@router.get("/gantt", dependencies=[Depends(any_user)])
+async def get_gantt_chart_data():
+    """
+    Returns production schedule data grouped for Gantt chart.
+    Structure:
+    - 6T  -> { tank_config: [ ...batches from production_schedule ] }
+    - 12T -> { tank_config: [ ...batches from production_schedule ] }
+    - Tanks -> [ ...flat list of events from timeline_events where resource is a tank ]
+    """
+    try:
+        engine = get_engine()
+        
+        # 1. Fetch data from production_schedule for 6T and 12T
+        ps_query = text("SELECT * FROM production_schedule")
+        ps_df = pd.read_sql(ps_query, engine)
+        ps_df = ps_df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(pd.notnull(ps_df), None)
+
+        grouped_data = {
+            "6T": {},
+            "12T": {},
+            "Tanks": []
+        }
+
+        if not ps_df.empty:
+            for system in ["6T", "12T"]:
+                system_df = ps_df[ps_df['system'] == system]
+                system_dict = {}
+                if not system_df.empty:
+                    for tank_config, config_group in system_df.groupby('tank_config'):
+                        system_dict[str(tank_config)] = config_group.to_dict(orient="records")
+                grouped_data[system] = system_dict
+
+        # 2. Fetch data from timeline_events for Tanks (flat list)
+        te_query = text("SELECT * FROM timeline_events ORDER BY start_time ASC")
+        te_df = pd.read_sql(te_query, engine)
+        
+        # Replace NaN/Inf for JSON safety
+        te_df = te_df.replace({np.nan: None, np.inf: None, -np.inf: None})
+
+        if not te_df.empty:
+            # Filter for tanks using same logic as status.py
+            tanks_events = []
+            for _, row in te_df.iterrows():
+                item = row.to_dict()
+                # Use None for timestamps that might be null if pandas didn't convert them correctly
+                # but pandas usually keeps them as timestamps or NaT
+                # Ensuring they are serializable strings if needed, though FastAPI handles datetime
+                
+                res_name = str(item.get("resource_name", "") or "").upper()
+                res_type = str(item.get("resource_type", "") or "").upper()
+                
+                if res_type == "STORAGE_TANK" or "TANK" in res_name or "TK#" in res_name:
+                    tanks_events.append(item)
+            
+            grouped_data["Tanks"] = tanks_events
+
+        return {
+            "status": "success",
+            "message": "Gantt chart data retrieved successfully",
+            "data": grouped_data
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching Gantt chart data: {str(e)}"
+        )
+
+@router.get("")
 async def get_production_schedule(
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
