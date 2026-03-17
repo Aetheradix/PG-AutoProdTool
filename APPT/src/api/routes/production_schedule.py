@@ -34,7 +34,57 @@ class ProductionScheduleCreate(ProductionScheduleUpdate):
     batch_id: str
 
 
-@router.get("", dependencies=[Depends(any_user)])
+@router.get("/gantt")
+async def get_gantt_chart_data():
+    """
+    Returns production schedule data grouped for Gantt chart.
+    Structure: 3 top-level groups: '6T', '12T', and 'Tanks'.
+    - 6T  -> { tank_config: [ ...batches ] }
+    - 12T -> { tank_config: [ ...batches ] }
+    - Tanks -> { storage_tank: [ ...batches ] }
+    """
+    try:
+        engine = get_engine()
+        query = text("SELECT * FROM production_schedule")
+        df = pd.read_sql(query, engine)
+
+       
+        df = df.replace({np.nan: np.nan, np.inf: np.nan, -np.inf: np.nan}).where(pd.notnull(df), None)
+
+        grouped_data = {
+            "6T": {},
+            "12T": {},
+            "Tanks": {}
+        }
+
+        if not df.empty:
+            # Group 6T and 12T by system -> tank_config -> list of batches
+            for system in ["6T", "12T"]:
+                system_df = df[df['system'] == system]
+                system_dict = {}
+                if not system_df.empty:
+                    for tank_config, config_group in system_df.groupby('tank_config'):
+                        system_dict[str(tank_config)] = config_group.to_dict(orient="records")
+                grouped_data[system] = system_dict
+
+            # 'Tanks' group: all records grouped by storage_tank
+            tanks_dict = {}
+            for storage_tank, tank_group in df.groupby('storage_tank'):
+                tanks_dict[str(storage_tank)] = tank_group.to_dict(orient="records")
+            grouped_data["Tanks"] = tanks_dict
+
+        return {
+            "status": "success",
+            "message": "Gantt chart data retrieved successfully",
+            "data": grouped_data
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching Gantt chart data: {str(e)}"
+        )
+
+@router.get("")
 async def get_production_schedule(
     page: int = Query(default=1, ge=1, description="Page number"),
     limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
