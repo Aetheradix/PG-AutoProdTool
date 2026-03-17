@@ -34,44 +34,61 @@ class ProductionScheduleCreate(ProductionScheduleUpdate):
     batch_id: str
 
 
-@router.get("/gantt")
+@router.get("/gantt", dependencies=[Depends(any_user)])
 async def get_gantt_chart_data():
     """
     Returns production schedule data grouped for Gantt chart.
-    Structure: 3 top-level groups: '6T', '12T', and 'Tanks'.
-    - 6T  -> { tank_config: [ ...batches ] }
-    - 12T -> { tank_config: [ ...batches ] }
-    - Tanks -> { storage_tank: [ ...batches ] }
+    Structure:
+    - 6T  -> { tank_config: [ ...batches from production_schedule ] }
+    - 12T -> { tank_config: [ ...batches from production_schedule ] }
+    - Tanks -> [ ...flat list of events from timeline_events where resource is a tank ]
     """
     try:
         engine = get_engine()
-        query = text("SELECT * FROM production_schedule")
-        df = pd.read_sql(query, engine)
-
-       
-        df = df.replace({np.nan: np.nan, np.inf: np.nan, -np.inf: np.nan}).where(pd.notnull(df), None)
+        
+        # 1. Fetch data from production_schedule for 6T and 12T
+        ps_query = text("SELECT * FROM production_schedule")
+        ps_df = pd.read_sql(ps_query, engine)
+        ps_df = ps_df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(pd.notnull(ps_df), None)
 
         grouped_data = {
             "6T": {},
             "12T": {},
-            "Tanks": {}
+            "Tanks": []
         }
 
-        if not df.empty:
-            # Group 6T and 12T by system -> tank_config -> list of batches
+        if not ps_df.empty:
             for system in ["6T", "12T"]:
-                system_df = df[df['system'] == system]
+                system_df = ps_df[ps_df['system'] == system]
                 system_dict = {}
                 if not system_df.empty:
                     for tank_config, config_group in system_df.groupby('tank_config'):
                         system_dict[str(tank_config)] = config_group.to_dict(orient="records")
                 grouped_data[system] = system_dict
 
-            # 'Tanks' group: all records grouped by storage_tank
-            tanks_dict = {}
-            for storage_tank, tank_group in df.groupby('storage_tank'):
-                tanks_dict[str(storage_tank)] = tank_group.to_dict(orient="records")
-            grouped_data["Tanks"] = tanks_dict
+        # 2. Fetch data from timeline_events for Tanks (flat list)
+        te_query = text("SELECT * FROM timeline_events ORDER BY start_time ASC")
+        te_df = pd.read_sql(te_query, engine)
+        
+        # Replace NaN/Inf for JSON safety
+        te_df = te_df.replace({np.nan: None, np.inf: None, -np.inf: None})
+
+        if not te_df.empty:
+            # Filter for tanks using same logic as status.py
+            tanks_events = []
+            for _, row in te_df.iterrows():
+                item = row.to_dict()
+                # Use None for timestamps that might be null if pandas didn't convert them correctly
+                # but pandas usually keeps them as timestamps or NaT
+                # Ensuring they are serializable strings if needed, though FastAPI handles datetime
+                
+                res_name = str(item.get("resource_name", "") or "").upper()
+                res_type = str(item.get("resource_type", "") or "").upper()
+                
+                if res_type == "STORAGE_TANK" or "TANK" in res_name or "TK#" in res_name:
+                    tanks_events.append(item)
+            
+            grouped_data["Tanks"] = tanks_events
 
         return {
             "status": "success",
