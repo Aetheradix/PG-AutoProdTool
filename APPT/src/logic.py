@@ -137,8 +137,8 @@ class Scheduler:
 
         return f"{letters}{numbers:03d}"
 
-    def run_initial_schedule(self, demands: List[Demand], target_date: datetime = None,
-                             start_batch_id: str = "CI400") -> List[ProductionBatch]:
+    def run_initial_schedule(self, demands, target_date=None, start_batch_id="CI400", downtimes=None):
+        if downtimes is None: downtimes = []
         print(f"--- Calculating Initial Schedule ({len(demands)} raw demands) ---")
 
         anchor_date = target_date if target_date else demands[0].pkg_start_dt
@@ -245,14 +245,35 @@ class Scheduler:
                     if val and str(val).strip() and str(val).lower() != "nan":
                         bulk_desc = str(val).strip()
                         break
-
+            # 1. FIXED: Restored the raw_mkg_start calculation
             min_buffer = self._get_buffer_time(d.description)
             raw_mkg_end = d.pkg_start_dt - timedelta(minutes=min_buffer)
             raw_mkg_start = raw_mkg_end - timedelta(minutes=int(bct))
             final_mkg_start = self._apply_shift_constraints(raw_mkg_start)
             final_mkg_end = final_mkg_start + timedelta(minutes=int(bct))
-            actual_buffer = int((d.pkg_start_dt - final_mkg_end).total_seconds() / 60)
 
+            # --- PLANNED DOWNTIME RESOLUTION ---
+            overlap = True
+            while overlap:
+                overlap = False
+                for dt in downtimes:
+                    # 2. FIXED: Changed 'display_system' to 'system'
+                    if dt['system'] == 'ALL' or dt['system'] in system:
+                        # Check for collision: (StartA < EndB) and (EndA > StartB)
+                        if final_mkg_start < dt['end'] and final_mkg_end > dt['start']:
+                            # COLLISION DETECTED! Push batch to finish BEFORE maintenance starts
+                            final_mkg_end = dt['start']
+                            final_mkg_start = final_mkg_end - timedelta(minutes=int(bct))
+
+                            # Re-apply shift logic in case we just pushed it into a weekend!
+                            final_mkg_start = self._apply_shift_constraints(final_mkg_start)
+                            final_mkg_end = final_mkg_start + timedelta(minutes=int(bct))
+
+                            # Restart the loop to ensure we didn't push into a SECOND downtime block
+                            overlap = True
+                            break
+
+            actual_buffer = int((d.pkg_start_dt - final_mkg_end).total_seconds() / 60)
             shift = self._get_shift(final_mkg_start)
 
             # --- EXTRACT TECH TYPE FROM MASTER DATA ---
@@ -263,7 +284,6 @@ class Scheduler:
                     tech_type = str(val).strip().title()
 
             # --- CONDITIONER FAILSAFE ---
-            # Force all conditioners to be 'Dual' (FMT+MMT) even if the database is blank
             desc_lower = str(d.description).lower()
             is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
             if is_cond:
@@ -297,7 +317,6 @@ class Scheduler:
 
         self.next_batch_id = current_bid
         return self.batches
-
 
 # ---------------------------------------------------------
 # 3. TANK SCHEDULER (HYBRID OPTIMIZATION)
