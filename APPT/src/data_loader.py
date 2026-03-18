@@ -115,43 +115,45 @@ class DataLoader:
 
         return sku_map
 
-    def load_packing_plan(self) -> List[Demand]:
-        print(f"Loading Packing Plan from SQL (packing_po)...")
-        df = db.fetch_table(config.TABLE_PACKING_PO)
-        if df.empty:
-            print("[WARN] packing_po table is empty!")
-            return []
-
+    def load_packing_plan(self, target_date=None) -> List[Demand]:
+        print("Loading Packing Plan from SQL (packing_po)...")
         demands = []
-        df.columns = [c.lower() for c in df.columns]
-        excluded_lines = ['INM1', 'INM2']
+        try:
+            # 1. Add the Target Date Filter to the SQL Query
+            query = "SELECT line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty FROM packing_po"
 
-        for _, row in df.iterrows():
-            try:
-                line = str(row.get(config.COL_SQL_LINE, "")).strip().upper()
-                if line in excluded_lines: continue
+            if target_date:
+                # Format the Python datetime into a SQL-friendly string (YYYY-MM-DD)
+                date_str = target_date.strftime('%Y-%m-%d')
+                # Filter so we only grab orders that fall on the chosen day
+                query += f" WHERE DATE(start_datetime) = '{date_str}'"
+                print(f"   > Filtering orders for date: {date_str}")
 
-                order = str(row.get(config.COL_SQL_ORDER, ""))
-                mat = str(row.get(config.COL_SQL_MATERIAL, ""))
-                desc = str(row.get(config.COL_SQL_DESC, ""))
-                qty = float(row.get(config.COL_SQL_QTY, 0))
+            df = pd.read_sql(query, db.get_engine())
+            if df.empty:
+                print("   > No demands found in DB for this date.")
+                return []
 
-                dt_start = row.get(config.COL_SQL_START)
-                dt_end = row.get(config.COL_SQL_END)
-                if pd.isna(dt_start): continue
-                if pd.isna(dt_end): dt_end = dt_start
+            for _, row in df.iterrows():
+                try:
+                    qty = float(row['planned_qty'])
+                    if qty <= 0: continue
 
-                demands.append(Demand(
-                    order_id=order,
-                    material_code=mat,
-                    description=desc,
-                    quantity=qty,
-                    pkg_start_dt=dt_start,
-                    pkg_end_dt=dt_end,
-                    line=line
-                ))
-            except Exception as e:
-                continue
+                    d = Demand(
+                        order_id=str(row['order_no']).strip(),
+                        material_code=str(row['p_code']).strip(),
+                        description=str(row['description']).strip(),
+                        quantity=qty,
+                        pkg_start_dt=pd.to_datetime(row['start_datetime']),
+                        pkg_end_dt=pd.to_datetime(row['end_datetime']),
+                        line=str(row['line']).strip()
+                    )
+                    demands.append(d)
+                except Exception as e:
+                    pass
 
-        print(f"Loaded {len(demands)} valid demands.")
+        except Exception as e:
+            print(f"Error loading packing plan from DB: {e}")
+
+        print(f"Loaded {len(demands)} demands.")
         return demands

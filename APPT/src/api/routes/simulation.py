@@ -1,3 +1,5 @@
+import os
+import re
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime
@@ -17,9 +19,9 @@ from src.plan_exporter import upload_to_sql
 router = APIRouter()
 
 
+# --- 1. VALIDATION MODELS ---
 class DowntimeBlock(BaseModel):
     system: str
-    # Make these Optional so FastAPI doesn't crash if React uses a different name
     start_datetime: Optional[str] = None
     end_datetime: Optional[str] = None
     start: Optional[str] = None
@@ -28,38 +30,122 @@ class DowntimeBlock(BaseModel):
 
 
 class SimulationRequest(BaseModel):
-    # Accept either date format from the frontend
     target_date: Optional[str] = None
     start_date: Optional[str] = None
     downtimes: Optional[List[DowntimeBlock]] = []
 
 
-@router.post("/run", dependencies=[Depends(admin_required)])
+# --- 2. EXCEL TO SQL HELPERS ---
+def upload_packing_plan(file_path):
+    """Reads the Excel file and pushes it to the packing_po SQL table"""
+    print(f"   > Uploading Demand to SQL: {os.path.basename(file_path)}")
+    try:
+        df = pd.read_excel(file_path)
+    except:
+        try:
+            df = pd.read_csv(file_path, encoding='cp1252')
+        except:
+            return False
+
+    col_map = {
+        'Production Line': 'Production Line', 'Line': 'Production Line',
+        'Order': 'Order', 'Process Order': 'Order', 'Material': 'Material',
+        'Material Number': 'Material', 'Description': 'Description',
+        'Material Description': 'Description', 'Batch': 'Batch',
+        'Batch Number': 'Batch', 'Start Date': 'Start Date',
+        'Start Time': 'Start Time', 'End Date': 'End Date',
+        'End Time': 'End Time', 'Planned Quantity': 'Planned Quantity',
+        'Quantity': 'Planned Quantity'
+    }
+    df.columns = [str(c).strip() for c in df.columns]
+    df.rename(columns=col_map, inplace=True)
+
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    cursor.execute("TRUNCATE TABLE packing_po")  # Wipe the old day's data!
+
+    data_to_insert = []
+    for _, row in df.iterrows():
+        try:
+            def parse_dt(d_val, t_val):
+                s = f"{d_val} {t_val}".strip()
+                for fmt in ["%d.%m.%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"]:
+                    try:
+                        return datetime.strptime(s, fmt)
+                    except:
+                        pass
+                if isinstance(d_val, datetime): return d_val
+                return None
+
+            start_dt = parse_dt(row.get('Start Date'), row.get('Start Time'))
+            end_dt = parse_dt(row.get('End Date'), row.get('End Time'))
+
+            if start_dt:
+                if not end_dt: end_dt = start_dt
+                data_to_insert.append((
+                    str(row.get('Production Line', '')), str(row.get('Order', '')),
+                    str(row.get('Material', '')), str(row.get('Description', '')),
+                    str(row.get('Batch', '')), start_dt, end_dt,
+                    float(row.get('Planned Quantity', 0))
+                ))
+        except:
+            continue
+
+    if data_to_insert:
+        stmt = """INSERT INTO packing_po (line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty)
+                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        cursor.executemany(stmt, data_to_insert)
+        conn.commit()
+    cursor.close()
+    conn.close()
+    return True
+
+
+def load_excel_for_date(target_dt: datetime):
+    """Finds the matching Excel file in the input folder based on the chosen calendar date"""
+    day = target_dt.day
+    month_str = target_dt.strftime("%b")  # e.g., 'Jan'
+
+    # Regex to match names like "packing_plan_17th Jan.xlsx" or "packing_plan_17 Jan.csv"
+    pattern = re.compile(rf"packing_plan_{day}(?:st|nd|rd|th)?\s+{month_str}.*\.(xlsx|csv)", re.IGNORECASE)
+
+    input_dir = config.INPUT_DIR
+    if not os.path.exists(input_dir):
+        return False
+
+    for fname in os.listdir(input_dir):
+        if pattern.match(fname):
+            file_path = os.path.join(input_dir, fname)
+            return upload_packing_plan(file_path)
+
+    print(f"   > WARNING: Could not find an Excel file for {day} {month_str} in {input_dir}")
+    return False
+
+
+# --- 3. THE API ENDPOINT ---
+@router.post("/run")
 def run_simulation_api(request: SimulationRequest):
     try:
         print("\n=== API REQUEST RECEIVED: /run ===")
 
-        # 1. Safely grab whichever date string React sent
         raw_date_str = request.start_date or request.target_date
         if not raw_date_str:
             return {"status": "error", "message": "No date provided by the frontend."}
 
-        # Parse Frontend Date
         target_dt = datetime.fromisoformat(raw_date_str.replace('Z', '+00:00')).replace(tzinfo=None)
         if target_dt.hour == 0 and target_dt.minute == 0:
             target_dt = target_dt.replace(hour=7, minute=30)
 
         print(f"Target Date: {target_dt.strftime('%Y-%m-%d %H:%M')}")
 
-        # 2. Parse the Planned Downtimes safely
+        # --- NEW STEP: UPLOAD THE EXCEL FILE TO SQL FIRST! ---
+        load_excel_for_date(target_dt)
+
         parsed_downtimes = []
         for dt in request.downtimes:
-            # Safely grab whichever start/end string React sent
             raw_start = dt.start_datetime or dt.start
             raw_end = dt.end_datetime or dt.end
-
-            if not raw_start or not raw_end:
-                continue  # Skip invalid blocks
+            if not raw_start or not raw_end: continue
 
             parsed_downtimes.append({
                 "system": dt.system,
@@ -68,10 +154,6 @@ def run_simulation_api(request: SimulationRequest):
                 "reason": dt.reason or "Maintenance"
             })
 
-        print(f"Downtime Blocks: {len(parsed_downtimes)}")
-        for d in parsed_downtimes:
-            print(f"  - [{d['system']}] {d['start'].strftime('%H:%M')} to {d['end'].strftime('%H:%M')} ({d['reason']})")
-        # 3. Update Ground Truth Sensors
         try:
             update_tank_status(target_dt=target_dt)
         except Exception as e:
@@ -79,14 +161,14 @@ def run_simulation_api(request: SimulationRequest):
 
         tank_snapshot = get_storage_tank_snapshot(target_dt=target_dt)
 
-        # 4. Load Data directly from SQL
         loader = DataLoader("dummy", "dummy")
         master_data = loader.load_master_data()
         bulk_map = loader.load_bulk_variant_map()
 
-        demands = loader.load_packing_plan()
+        # The loader will now grab the fresh data we just pushed to the DB!
+        demands = loader.load_packing_plan(target_date=target_dt)
         if not demands:
-            return {"status": "error", "message": f"No packing plan found in SQL for {target_dt.strftime('%Y-%m-%d')}!"}
+            return {"status": "error", "message": f"No packing plan found for {target_dt.strftime('%Y-%m-%d')}!"}
 
         wo_matrices = loader.load_washout_matrices()
 
@@ -101,19 +183,16 @@ def run_simulation_api(request: SimulationRequest):
         except:
             pass
 
-        # 5. Initialize Engines
         enricher = PlanEnricher(master_data, bulk_map)
         scheduler = Scheduler(enricher)
         tank_opt = TankScheduler(wo_matrices)
         storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
         mrp_planner = MaterialPlanner(master_data)
 
-        # 6. Run the Optimization Loop
         final_batches = []
         washouts = []
 
         for i in range(3):
-            # Pass downtimes to the initial scheduler so it evades those blocks
             raw_batches = scheduler.run_initial_schedule(demands, target_date=target_dt, downtimes=parsed_downtimes)
             cur_batches, cur_washouts = tank_opt.optimize(raw_batches, target_date=target_dt)
             storage_assigner.assign_tanks(cur_batches)
@@ -127,9 +206,7 @@ def run_simulation_api(request: SimulationRequest):
                 washouts = cur_washouts
                 break
 
-        # 7. Upload Results to SQL
         if final_batches:
-            # Pass downtimes to the exporter so they show up on the Gantt chart!
             upload_to_sql(final_batches, washouts, downtimes=parsed_downtimes)
             return {
                 "status": "success",

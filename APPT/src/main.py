@@ -153,7 +153,7 @@ def main():
     start_perf = perf_time.time()
     print("=== AUTO PRODUCTION PLANNER (FINAL + TIMELINE) ===")
 
-    target_date = datetime(2026, 1, 18, 7, 30)
+    #target_date = datetime(2026, 1, 18, 7, 30)
 
     # 1. Update Sensors
     try:
