@@ -36,7 +36,8 @@ def get_engine():
                 url,
                 pool_size=5,
                 max_overflow=10,
-                pool_recycle=1800
+                pool_recycle=1800,
+                pool_pre_ping=True
             )
         except Exception as e:
             print(f"DB Engine Error: {e}")

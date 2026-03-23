@@ -13,7 +13,8 @@ from src.api.routes import (
     bpr_pdr,
     tank_status,
     simulation,
-    auth
+    auth,
+    packing_plan
 )
 
 app = FastAPI(
@@ -37,6 +38,8 @@ app.include_router(rm_data.router, prefix="/api/v1/rm-data", tags=["RM Data"])
 app.include_router(status.router, prefix="/api/v1", tags=["Status"])
 app.include_router(recent_data.router, prefix="/api/v1", tags=["Recent Data"])
 app.include_router(excel.router, prefix="/api/excel", tags=["Excel"])
+
+app.include_router(packing_plan.router, prefix="/api/v1", tags=["Packing Plan"] )
 
 app.include_router(sku_master.router, prefix="/api/v1/sku-master", tags=["SKU Master"])
 app.include_router(
