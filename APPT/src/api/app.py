@@ -1,6 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import pandas as pd
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
 from src.db import get_engine
 from src.api.routes import (
     status,
@@ -62,7 +65,22 @@ app.include_router(
     tags=["Simulation"]
 )
 
+# @app.get("/")
+# def read_root():
+#     return {"message": "Welcome to the Auto Production Planner API", "docs": "/docs"}
 
+# --- PUT THIS AT THE ABSOLUTE BOTTOM OF app.py ---
+
+# 1. Mount the assets folder (JS/CSS/Images)
+ui_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static_ui")
+app.mount("/assets", StaticFiles(directory=os.path.join(ui_dir, "assets")), name="assets")
+
+# 2. Explicitly serve the React app on the root URL ("/")
 @app.get("/")
-def read_root():
-    return {"message": "Welcome to the Auto Production Planner API", "docs": "/docs"}
+async def serve_react_root():
+    return FileResponse(os.path.join(ui_dir, "index.html"))
+
+# 3. Catch-all for React Router (e.g., if the user refreshes on /schedule)
+@app.get("/{catchall:path}")
+async def serve_react_app(catchall: str):
+    return FileResponse(os.path.join(ui_dir, "index.html"))
