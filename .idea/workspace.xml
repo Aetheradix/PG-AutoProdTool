@@ -5,9 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8e094196-47f9-4b6f-aa09-e2267cdcd33b" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/APPT.zip" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/1_Install_Dependencies.bat" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/1_Install_Dependencies.bat" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/2_Run_Application.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/src/logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/logic.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
