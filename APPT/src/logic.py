@@ -184,7 +184,7 @@ class Scheduler:
 
             is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
             is_explicit_6t = "6t" in desc_lower or (
-                        item["variant"] and item["variant"].gcas != "UNKNOWN" and "6T" in str(item["variant"].gcas))
+                    item["variant"] and item["variant"].gcas != "UNKNOWN" and "6T" in str(item["variant"].gcas))
 
             if is_cond:
                 max_msu_limit = 1.2
@@ -201,7 +201,12 @@ class Scheduler:
                 current = accumulating_demands[gcas]
                 combined_msu = current["msu"] + item["msu"]
 
-                if combined_msu <= max_msu_limit:
+                # --- NEW: 12-HOUR MERGE LIMIT ---
+                time_diff_hours = abs(
+                    (current["demand"].pkg_start_dt - item["demand"].pkg_start_dt).total_seconds() / 3600.0)
+
+                # Only merge if MSU fits AND they are within 12 hours of each other
+                if combined_msu <= max_msu_limit and time_diff_hours <= 12:
                     merged_demand = Demand(
                         order_id=f"{current['demand'].order_id} + {item['demand'].order_id}",
                         material_code=current["demand"].material_code,
@@ -245,7 +250,7 @@ class Scheduler:
                     if val and str(val).strip() and str(val).lower() != "nan":
                         bulk_desc = str(val).strip()
                         break
-            # 1. FIXED: Restored the raw_mkg_start calculation
+
             min_buffer = self._get_buffer_time(d.description)
             raw_mkg_end = d.pkg_start_dt - timedelta(minutes=min_buffer)
             raw_mkg_start = raw_mkg_end - timedelta(minutes=int(bct))
@@ -257,19 +262,14 @@ class Scheduler:
             while overlap:
                 overlap = False
                 for dt in downtimes:
-                    # 2. FIXED: Changed 'display_system' to 'system'
                     if dt['system'] == 'ALL' or dt['system'] in system:
-                        # Check for collision: (StartA < EndB) and (EndA > StartB)
                         if final_mkg_start < dt['end'] and final_mkg_end > dt['start']:
-                            # COLLISION DETECTED! Push batch to finish BEFORE maintenance starts
                             final_mkg_end = dt['start']
                             final_mkg_start = final_mkg_end - timedelta(minutes=int(bct))
 
-                            # Re-apply shift logic in case we just pushed it into a weekend!
                             final_mkg_start = self._apply_shift_constraints(final_mkg_start)
                             final_mkg_end = final_mkg_start + timedelta(minutes=int(bct))
 
-                            # Restart the loop to ensure we didn't push into a SECOND downtime block
                             overlap = True
                             break
 
@@ -283,13 +283,11 @@ class Scheduler:
                 if val and str(val).strip().lower() not in ['nan', 'none', '']:
                     tech_type = str(val).strip().title()
 
-            # --- CONDITIONER FAILSAFE ---
             desc_lower = str(d.description).lower()
             is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
             if is_cond:
                 tech_type = "Dual"
 
-            # --- SEPARATE TANK CONFIG LOGIC ---
             tank_config_val = "FMT+MMT" if "Dual" in tech_type else "FMT"
 
             # --- DYNAMIC BATCH IDENTIFIERS ---
@@ -300,7 +298,6 @@ class Scheduler:
                 bid = current_bid
                 current_bid = self._generate_next_batch_id(current_bid)
 
-            # Keep 'system' pure (12T/6T) and create the batch
             batch = ProductionBatch(
                 id=bid, sku_code=gcas, system=system, shift=shift,
                 mkg_start_dt=final_mkg_start, bct=int(bct),
@@ -310,13 +307,12 @@ class Scheduler:
                 desc=bulk_desc, total_msu=msu, line=d.line, tech_type=tech_type
             )
 
-            # Safely attach the new configuration attribute
             batch.tank_config = tank_config_val
-
             self.batches.append(batch)
 
         self.next_batch_id = current_bid
         return self.batches
+
 
 # ---------------------------------------------------------
 # 3. TANK SCHEDULER (HYBRID OPTIMIZATION)
@@ -463,7 +459,12 @@ class TankScheduler:
                             gap = wash_dur + (config.COND_COOLDOWN if self._is_conditioner(b) else 0)
                             proposed_start = prev.mkg_end_dt + timedelta(minutes=gap)
 
-                        earliest_allowed_start = b.pkg_start_dt - timedelta(days=2) - timedelta(minutes=b.bct)
+                        # --- NEW: DYNAMIC MAX BUFFER TIME CLAMP ---
+                        # 36 hours for Conditioners, 24 hours for Standard Batches
+                        max_buffer_hours = 36 if self._is_conditioner(b) else 24
+                        earliest_allowed_start = b.pkg_start_dt - timedelta(hours=max_buffer_hours) - timedelta(
+                            minutes=b.bct)
+
                         if proposed_start < earliest_allowed_start:
                             proposed_start = earliest_allowed_start
 
