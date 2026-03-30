@@ -101,6 +101,9 @@ async def get_gantt_chart_data():
             detail=f"Error fetching Gantt chart data: {str(e)}"
         )
 
+
+
+# --------------------------------Table View-----------------------------------
 @router.get("")
 async def get_production_schedule(
     page: int = Query(default=1, ge=1, description="Page number"),
@@ -151,7 +154,7 @@ async def get_production_schedule(
             detail=f"Error fetching production schedule: {str(e)}"
         )
 
-
+# ------------------------------------------------------------------------------
 @router.post("", dependencies=[Depends(admin_required)])
 async def create_production_schedule(data: ProductionScheduleCreate):
     """
