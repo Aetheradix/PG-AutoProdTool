@@ -1,7 +1,7 @@
 import sys
 import os
 import re
-from datetime import timedelta
+from datetime import timedelta, time
 from src import db
 
 
@@ -29,7 +29,7 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 description VARCHAR(255),
                 gcas VARCHAR(50),
                 system VARCHAR(50),
-                tank_config VARCHAR(50),   -- NEW COLUMN
+                tank_config VARCHAR(50),   
                 total_msu FLOAT,
                 tech_type VARCHAR(50),
                 shift VARCHAR(10),
@@ -44,14 +44,57 @@ def upload_to_sql(batches, washouts, downtimes=None):
         """)
 
         batch_data = []
+
+        # A. Add the real production batches
         for b in batches:
             batch_data.append((
                 b.id, b.line, str(b.linked_order), str(b.material), b.desc,
                 str(b.sku_code), b.system,
-                getattr(b, 'tank_config', 'FMT'),  # Safely grab the config
+                getattr(b, 'tank_config', 'FMT'),
                 round(b.total_msu, 4), b.tech_type,
                 b.shift, b.mkg_start_dt, b.bct, b.mkg_end_dt, b.buffer_min,
                 b.storage_tank, b.pkg_start_dt, b.pkg_end_dt
+            ))
+
+        # --- NEW: B. INJECT DOWNTIMES INTO THE SCHEDULE QUEUE ---
+        for i, dt in enumerate(downtimes, 1):
+            sys_name = dt['system']
+            if sys_name == "ALL": sys_name = "ALL_SYSTEMS"
+
+            # Calculate duration for the BCT column
+            dur_mins = int((dt['end'] - dt['start']).total_seconds() / 60)
+
+            # Determine Shift based on start time
+            t = dt['start'].time()
+            if t >= time(7, 30) and t < time(15, 30):
+                shift = "A"
+            elif t >= time(15, 30) and t < time(23, 30):
+                shift = "B"
+            else:
+                shift = "C"
+
+            # Generate a highly visible dummy batch ID
+            dt_batch_id = f"MAINT-{dt['start'].strftime('%m%d')}-{i}"
+
+            batch_data.append((
+                dt_batch_id,  # batch_id
+                "N/A",  # production_line
+                "N/A",  # order_id
+                "N/A",  # material
+                f"DOWNTIME: {dt['reason']}",  # description (from React frontend!)
+                "N/A",  # gcas
+                sys_name,  # system
+                "N/A",  # tank_config
+                0.0,  # total_msu
+                "N/A",  # tech_type
+                shift,  # shift
+                dt['start'],  # mkg_start_time
+                dur_mins,  # bct_minutes
+                dt['end'],  # mkg_end_time
+                0,  # buffer_minutes
+                "N/A",  # storage_tank
+                dt['start'],  # pkg_start_time (mirrored to keep UI happy)
+                dt['end']  # pkg_end_time (mirrored to keep UI happy)
             ))
 
         if batch_data:
@@ -61,7 +104,7 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             cursor.executemany(stmt_batch, batch_data)
-            print(f"Inserted {len(batch_data)} batches into 'production_schedule'.")
+            print(f"Inserted {len(batch_data)} rows (Batches + Downtimes) into 'production_schedule'.")
 
         # --- 2. UNIVERSAL TIMELINE EVENTS TABLE ---
         print("Updating table: timeline_events...")
@@ -107,7 +150,7 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 timeline_data.append(
                     (t_name, "STORAGE_TANK", b.mkg_end_dt, b.pkg_start_dt, f"{b.id}: {b.desc}", "TANK_HOLD"))
 
-        # --- FIXED: MOVED DOWNTIME OUTSIDE THE BATCH LOOP ---
+        # Inject Planned Downtime Blocks into Timeline
         for dt in downtimes:
             sys_name = dt['system']
             if sys_name == "ALL": sys_name = "ALL_SYSTEMS"
@@ -129,7 +172,7 @@ def upload_to_sql(batches, washouts, downtimes=None):
             cursor.executemany(stmt_timeline, timeline_data)
             print(f"Inserted {len(timeline_data)} events into 'timeline_events'.")
 
-        # --- 3. BPR-PDR AUDIT TABLE (FIXED: MOVED OUTSIDE THE IF BLOCK) ---
+        # --- 3. BPR-PDR AUDIT TABLE ---
         print("Updating table: bpr_pdr...")
         cursor.execute("DROP TABLE IF EXISTS bpr_pdr")
         cursor.execute("""
@@ -151,14 +194,14 @@ def upload_to_sql(batches, washouts, downtimes=None):
         for i, b in enumerate(batches, 1):
             bpr_data.append((
                 i,
-                b.mkg_start_dt.strftime("%d-%b-%y"),  # e.g. 10-Jan-26
+                b.mkg_start_dt.strftime("%d-%b-%y"),
                 b.id,
-                str(b.sku_code),  # Bulk FC GCAS
+                str(b.sku_code),
                 b.desc,
                 b.line,
                 b.system,
-                "", "",  # Signature blanks
-                str(b.material)  # Packing P Code
+                "", "",
+                str(b.material)
             ))
 
         if bpr_data:

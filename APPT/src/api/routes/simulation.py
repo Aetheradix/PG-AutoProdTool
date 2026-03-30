@@ -2,8 +2,8 @@ import os
 import re
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timedelta
+from typing import List, Optional, Any
 from src.auth import admin_required
 import pandas as pd
 import traceback
@@ -21,13 +21,15 @@ router = APIRouter()
 
 # --- 1. VALIDATION MODELS ---
 class DowntimeBlock(BaseModel):
-    system: str
+    id: Optional[Any] = None         # <-- NEW: Catch the React ID!
+    system: Optional[str] = "ALL"
+    startTime: Optional[str] = None
+    duration: Optional[int] = None   # <-- FIX: Accept an integer!
     start_datetime: Optional[str] = None
     end_datetime: Optional[str] = None
     start: Optional[str] = None
     end: Optional[str] = None
     reason: Optional[str] = "Maintenance"
-
 
 class SimulationRequest(BaseModel):
     target_date: Optional[str] = None
@@ -143,16 +145,42 @@ def run_simulation_api(request: SimulationRequest):
 
         parsed_downtimes = []
         for dt in request.downtimes:
-            raw_start = dt.start_datetime or dt.start
+            # 1. Safely grab the start time whichever way React sent it
+            raw_start = dt.start_datetime or dt.start or dt.startTime
+            if not raw_start: continue
+
+            # Convert start time safely (Handles both ISO strings and UI display strings)
+            try:
+                start_dt = datetime.fromisoformat(raw_start.replace('Z', '+00:00')).replace(tzinfo=None)
+            except ValueError:
+                try:
+                    start_dt = datetime.strptime(raw_start, "%d/%m/%Y, %I:%M %p")
+                except:
+                    continue
+
+            # 2. Safely calculate the End Time
             raw_end = dt.end_datetime or dt.end
-            if not raw_start or not raw_end: continue
+            if raw_end:
+                try:
+                    end_dt = datetime.fromisoformat(raw_end.replace('Z', '+00:00')).replace(tzinfo=None)
+                except:
+                    continue
+            elif dt.duration:
+                # Math: End Time = Start Time + Duration (mins)
+                end_dt = start_dt + timedelta(minutes=int(dt.duration))
+            else:
+                continue  # Skip if we have no way to calculate when it ends
 
             parsed_downtimes.append({
-                "system": dt.system,
-                "start": datetime.fromisoformat(raw_start.replace('Z', '+00:00')).replace(tzinfo=None),
-                "end": datetime.fromisoformat(raw_end.replace('Z', '+00:00')).replace(tzinfo=None),
+                "system": dt.system or "ALL",
+                "start": start_dt,
+                "end": end_dt,
                 "reason": dt.reason or "Maintenance"
             })
+
+        print(f"Downtime Blocks Accepted: {len(parsed_downtimes)}")
+        for d in parsed_downtimes:
+            print(f"  - [{d['system']}] {d['start'].strftime('%H:%M')} to {d['end'].strftime('%H:%M')} ({d['reason']})")
 
         try:
             update_tank_status(target_dt=target_dt)
