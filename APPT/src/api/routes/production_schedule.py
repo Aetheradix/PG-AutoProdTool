@@ -65,8 +65,71 @@ async def get_gantt_chart_data():
         raise HTTPException(
             status_code=500, detail=f"Error fetching Gantt chart data: {str(e)}"
         )
+    
+# GHANTT CHART EDITING AND TABLE VIEW ENDPOINTS BELOW
+@router.get("/gantt-edit")
+async def get_gantt_chart_data():
+    """
+    Returns production schedule data grouped for Gantt chart.
+    Structure:
+    - 6T  -> { tank_config: [ ...batches from production_schedule_editable ] }
+    - 12T -> { tank_config: [ ...batches from production_schedule_editable ] }
+    - Tanks -> [ ...flat list of events from timeline_events where resource is a tank ]
+    """
+    try:
+        engine = get_engine()
 
+        # 1. Fetch data from production_schedule_editable for 6T and 12T
+        ps_query = text("SELECT * FROM production_schedule_editable")
+        ps_df = pd.read_sql(ps_query, engine)
+        ps_df = ps_df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(
+            pd.notnull(ps_df), None
+        )
 
+       
+        return {
+            "status": "success",
+            "message": "Gantt chart data retrieved successfully",
+            "data": ps_df.to_dict(
+                orient="records"
+            ),  # Return as flat list for frontend grouping
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching Gantt chart data: {str(e)}"
+        )
+
+@router.put("/gantt-edit/{batch_id}")
+async def update_ghantt_data(batch_id: str, payload: dict):
+    try:
+        start_time = payload.get("start_time")
+        end_time = payload.get("end_time")
+
+        if not start_time or not end_time:
+            raise HTTPException(status_code=400, detail="start_time and end_time are required")
+
+        engine = get_engine()
+        query = text(
+            """
+            UPDATE production_schedule_editable
+            SET mkg_start_time = :start_time,
+                mkg_end_time = :end_time
+            WHERE batch_id = :batch_id
+            """
+        )
+
+        with engine.connect() as conn:
+            conn.execute(query, {
+                "start_time": start_time,
+                "end_time": end_time,
+                "batch_id": batch_id
+            })
+            conn.commit()
+
+        return {"success": True, "message": f"Event {batch_id} updated successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 # --------------------------------Table View-----------------------------------
 @router.get("")
 async def get_production_schedule(

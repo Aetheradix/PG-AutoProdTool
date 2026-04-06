@@ -76,11 +76,21 @@ ui_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))
 app.mount("/assets", StaticFiles(directory=os.path.join(ui_dir, "assets")), name="assets")
 
 # 2. Explicitly serve the React app on the root URL ("/")
+# @app.get("/")
+# async def serve_react_root():
+#     return FileResponse(os.path.join(ui_dir, "index.html"))
+
+# # 3. Catch-all for React Router (e.g., if the user refreshes on /schedule)
+# @app.get("/{catchall:path}")
+# async def serve_react_app(catchall: str):
+#     return FileResponse(os.path.join(ui_dir, "index.html"))
+
+
+
 @app.get("/")
 async def serve_react_root():
     return FileResponse(os.path.join(ui_dir, "index.html"))
 
-# 3. Catch-all for React Router (e.g., if the user refreshes on /schedule)
-@app.get("/{catchall:path}")
+@app.get("/app/{catchall:path}")
 async def serve_react_app(catchall: str):
     return FileResponse(os.path.join(ui_dir, "index.html"))
