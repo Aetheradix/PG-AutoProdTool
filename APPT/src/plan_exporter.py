@@ -17,11 +17,37 @@ def upload_to_sql(batches, washouts, downtimes=None):
     cursor = conn.cursor()
 
     try:
-        # --- 1. Production Schedule Table ---
+        # --- 1A. MASTER Production Schedule Table ---
         print("Updating table: production_schedule...")
         cursor.execute("DROP TABLE IF EXISTS production_schedule")
         cursor.execute("""
             CREATE TABLE production_schedule (
+                batch_id VARCHAR(50) PRIMARY KEY,
+                production_line VARCHAR(50),
+                order_id VARCHAR(50),
+                material VARCHAR(50),
+                description VARCHAR(255),
+                gcas VARCHAR(50),
+                system VARCHAR(50),
+                tank_config VARCHAR(50),   
+                total_msu FLOAT,
+                tech_type VARCHAR(50),
+                shift VARCHAR(10),
+                mkg_start_time DATETIME,
+                bct_minutes INT,
+                mkg_end_time DATETIME,
+                buffer_minutes INT,
+                storage_tank VARCHAR(100),
+                pkg_start_time DATETIME,
+                pkg_end_time DATETIME
+            )
+        """)
+
+        # --- 1B. EDITABLE Sandbox Schedule Table ---
+        print("Updating table: production_schedule_editable...")
+        cursor.execute("DROP TABLE IF EXISTS production_schedule_editable")
+        cursor.execute("""
+            CREATE TABLE production_schedule_editable (
                 batch_id VARCHAR(50) PRIMARY KEY,
                 production_line VARCHAR(50),
                 order_id VARCHAR(50),
@@ -56,15 +82,13 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 b.storage_tank, b.pkg_start_dt, b.pkg_end_dt
             ))
 
-        # --- NEW: B. INJECT DOWNTIMES INTO THE SCHEDULE QUEUE ---
+        # B. Inject Downtimes into the schedule queue
         for i, dt in enumerate(downtimes, 1):
             sys_name = dt['system']
             if sys_name == "ALL": sys_name = "ALL_SYSTEMS"
 
-            # Calculate duration for the BCT column
             dur_mins = int((dt['end'] - dt['start']).total_seconds() / 60)
 
-            # Determine Shift based on start time
             t = dt['start'].time()
             if t >= time(7, 30) and t < time(15, 30):
                 shift = "A"
@@ -73,38 +97,48 @@ def upload_to_sql(batches, washouts, downtimes=None):
             else:
                 shift = "C"
 
-            # Generate a highly visible dummy batch ID
             dt_batch_id = f"MAINT-{dt['start'].strftime('%m%d')}-{i}"
 
             batch_data.append((
-                dt_batch_id,  # batch_id
-                "N/A",  # production_line
-                "N/A",  # order_id
-                "N/A",  # material
-                f"DOWNTIME: {dt['reason']}",  # description (from React frontend!)
-                "N/A",  # gcas
-                sys_name,  # system
-                "N/A",  # tank_config
-                0.0,  # total_msu
-                "N/A",  # tech_type
-                shift,  # shift
-                dt['start'],  # mkg_start_time
-                dur_mins,  # bct_minutes
-                dt['end'],  # mkg_end_time
-                0,  # buffer_minutes
-                "N/A",  # storage_tank
-                dt['start'],  # pkg_start_time (mirrored to keep UI happy)
-                dt['end']  # pkg_end_time (mirrored to keep UI happy)
+                dt_batch_id,
+                "N/A",
+                "N/A",
+                "N/A",
+                f"DOWNTIME: {dt['reason']}",
+                "N/A",
+                sys_name,
+                "N/A",
+                0.0,
+                "N/A",
+                shift,
+                dt['start'],
+                dur_mins,
+                dt['end'],
+                0,
+                "N/A",
+                dt['start'],
+                dt['end']
             ))
 
         if batch_data:
-            stmt_batch = """
+            # Insert into Master Table
+            stmt_master = """
                 INSERT INTO production_schedule 
                 (batch_id, production_line, order_id, material, description, gcas, system, tank_config, total_msu, tech_type, shift, mkg_start_time, bct_minutes, mkg_end_time, buffer_minutes, storage_tank, pkg_start_time, pkg_end_time) 
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            cursor.executemany(stmt_batch, batch_data)
-            print(f"Inserted {len(batch_data)} rows (Batches + Downtimes) into 'production_schedule'.")
+            cursor.executemany(stmt_master, batch_data)
+
+            # Insert identical data into Editable Table
+            stmt_editable = """
+                INSERT INTO production_schedule_editable 
+                (batch_id, production_line, order_id, material, description, gcas, system, tank_config, total_msu, tech_type, shift, mkg_start_time, bct_minutes, mkg_end_time, buffer_minutes, storage_tank, pkg_start_time, pkg_end_time) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.executemany(stmt_editable, batch_data)
+
+            print(
+                f"Inserted {len(batch_data)} rows into BOTH 'production_schedule' and 'production_schedule_editable'.")
 
         # --- 2. UNIVERSAL TIMELINE EVENTS TABLE ---
         print("Updating table: timeline_events...")

@@ -21,10 +21,10 @@ router = APIRouter()
 
 # --- 1. VALIDATION MODELS ---
 class DowntimeBlock(BaseModel):
-    id: Optional[Any] = None         # <-- NEW: Catch the React ID!
+    id: Optional[Any] = None
     system: Optional[str] = "ALL"
     startTime: Optional[str] = None
-    duration: Optional[int] = None   # <-- FIX: Accept an integer!
+    duration: Optional[int] = None
     start_datetime: Optional[str] = None
     end_datetime: Optional[str] = None
     start: Optional[str] = None
