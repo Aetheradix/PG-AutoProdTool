@@ -34,6 +34,9 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+
+
+# -------------------------------------login------------------------------------------------
 @router.post("/login")
 async def login(login_data: LoginRequest):
     engine = get_engine()
@@ -65,10 +68,13 @@ async def login(login_data: LoginRequest):
             "email": result[4]
         }
 
+# --------------------------------------user-management------------------------------------------------
 @router.get("/me")
 async def read_users_me(current_user: dict = Depends(get_current_user)):
     return current_user
 
+
+#---------------------------------------admin-only user management------------------------------------------------
 @router.post("/signup")
 async def signup(user_data: UserCreate):
     engine = get_engine()
@@ -95,6 +101,8 @@ async def signup(user_data: UserCreate):
         )
     return {"message": "User created successfully"}
 
+
+#-------------------------------admin-only user management------------------------------------------------
 @router.get("/users", dependencies=[Depends(admin_required)])
 async def list_users():
     engine = get_engine()
@@ -112,6 +120,7 @@ async def list_users():
             } for r in result
         ]
 
+#-----------------------------------amdin update and delete user------------------------------------------------
 @router.patch("/users/{user_id}", dependencies=[Depends(admin_required)])
 async def update_user(user_id: int, user_data: UserUpdate):
     update_fields = []

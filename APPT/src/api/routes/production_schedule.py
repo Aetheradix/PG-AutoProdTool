@@ -130,6 +130,9 @@ async def update_ghantt_data(batch_id: str, payload: dict):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+    
 # --------------------------------Table View-----------------------------------
 @router.get("")
 async def get_production_schedule(
