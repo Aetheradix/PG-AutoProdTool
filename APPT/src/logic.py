@@ -509,11 +509,19 @@ class TankScheduler:
 # 4. STORAGE ASSIGNER
 # ---------------------------------------------------------
 class StorageAssigner:
-    def __init__(self, tank_snapshot: pd.DataFrame, pst_wo_matrix: dict = None):
+    # 1. Add active_resources to the parameters
+    def __init__(self, tank_snapshot: pd.DataFrame, pst_wo_matrix: dict = None, active_resources: dict = None):
         self.pst_wo_matrix = pst_wo_matrix or {}
         self.tanks = {}
-        self.portable_tanks = [f"TK#_{i}_#" for i in range(1, 29)]
-        self.ronchi_tanks = ["TK#_51_#", "TK#_52_#", "TK#_53_#"]
+
+        # 2. Use the dynamic lists from the database!
+        if active_resources:
+            self.portable_tanks = active_resources.get("PORTABLE_TANKS", [])
+            self.ronchi_tanks = active_resources.get("RONCHI_TANKS", [])
+        else:
+            self.portable_tanks = [f"TK#_{i}_#" for i in range(1, 29)]
+            self.ronchi_tanks = ["TK#_51_#", "TK#_52_#", "TK#_53_#"]
+
         self.allowed_tanks = self.portable_tanks + self.ronchi_tanks
 
         if not tank_snapshot.empty:
