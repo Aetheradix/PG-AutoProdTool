@@ -115,6 +115,39 @@ class DataLoader:
 
         return sku_map
 
+    def load_active_equipment(self) -> dict:
+        print("Loading Active Equipment from SQL (equipment_master)...")
+        try:
+            # Only pull equipment that is currently marked Active
+            query = "SELECT * FROM equipment_master WHERE LOWER(status) = 'active'"
+            df = pd.read_sql(query, db.get_engine())
+
+            # Clean up column names in case they have spaces (like 'resource group')
+            df.columns = [str(col).strip().lower().replace(' ', '_') for col in df.columns]
+
+            # Dynamically sort the equipment into lists using the equipment_name column
+            active_resources = {
+                "PORTABLE_TANKS":
+                    df[(df['equip_type'].str.lower() == 'tank') & (df['resource_group'].str.lower() == 'portable')][
+                        'equipment_name'].tolist(),
+                "RONCHI_TANKS":
+                    df[(df['equip_type'].str.lower() == 'tank') & (df['resource_group'].str.lower() == 'ronchi')][
+                        'equipment_name'].tolist(),
+                "LINES": df[df['equip_type'].str.lower() == 'line']['equipment_name'].tolist()
+            }
+            print(
+                f"   > Found {len(active_resources['PORTABLE_TANKS'])} Portable Tanks and {len(active_resources['RONCHI_TANKS'])} Ronchi Tanks.")
+            return active_resources
+
+        except Exception as e:
+            print(f"Error loading equipment master from DB: {e}. Using fallback defaults.")
+            # Failsafe: If the DB fails, use the hardcoded lists
+            return {
+                "PORTABLE_TANKS": [f"TK#_{i}_#" for i in range(1, 29)],
+                "RONCHI_TANKS": ["TK#_51_#", "TK#_52_#", "TK#_53_#"],
+                "LINES": []
+            }
+
     def load_packing_plan(self, target_date=None) -> List[Demand]:
         print("Loading Packing Plan from SQL (packing_po)...")
         demands = []
