@@ -17,7 +17,8 @@ from src.api.routes import (
     tank_status,
     simulation,
     auth,
-    packing_plan
+    packing_plan,
+    equipments_master
 )
 
 app = FastAPI(
@@ -42,7 +43,7 @@ app.include_router(status.router, prefix="/api/v1", tags=["Status"])
 app.include_router(recent_data.router, prefix="/api/v1", tags=["Recent Data"])
 app.include_router(excel.router, prefix="/api/excel", tags=["Excel"])
 
-app.include_router(packing_plan.router, prefix="/api/v1", tags=["Packing Plan"] )
+app.include_router(packing_plan.router, prefix="/api/v1", tags=["Packing Plan"])
 
 app.include_router(sku_master.router, prefix="/api/v1/sku-master", tags=["SKU Master"])
 app.include_router(
@@ -53,18 +54,18 @@ app.include_router(
     prefix="/api/v1/production-schedule",
     tags=["Production Schedule"],
 )
-app.include_router(
-    bpr_pdr.router, prefix="/api/v1/bpr-pdr", tags=["BPR-PDR"]
-)
+app.include_router(bpr_pdr.router, prefix="/api/v1/bpr-pdr", tags=["BPR-PDR"])
 app.include_router(
     tank_status.router, prefix="/api/v1/tank-status", tags=["Tank Status"]
 )
-app.include_router(
-    simulation.router,
-    prefix="/api/v1/simulation",
-    tags=["Simulation"]
-)
+app.include_router(simulation.router, prefix="/api/v1/simulation", tags=["Simulation"])
 
+
+app.include_router(
+    equipments_master.router,
+    prefix="/api/v1/equipments-master",
+    tags=["Equipments Master"],
+)
 # @app.get("/")
 # def read_root():
 #     return {"message": "Welcome to the Auto Production Planner API", "docs": "/docs"}
@@ -72,8 +73,12 @@ app.include_router(
 # --- PUT THIS AT THE ABSOLUTE BOTTOM OF app.py ---
 
 # 1. Mount the assets folder (JS/CSS/Images)
-ui_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static_ui")
-app.mount("/assets", StaticFiles(directory=os.path.join(ui_dir, "assets")), name="assets")
+ui_dir = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "static_ui"
+)
+app.mount(
+    "/assets", StaticFiles(directory=os.path.join(ui_dir, "assets")), name="assets"
+)
 
 # 2. Explicitly serve the React app on the root URL ("/")
 # @app.get("/")
@@ -86,10 +91,10 @@ app.mount("/assets", StaticFiles(directory=os.path.join(ui_dir, "assets")), name
 #     return FileResponse(os.path.join(ui_dir, "index.html"))
 
 
-
 @app.get("/")
 async def serve_react_root():
     return FileResponse(os.path.join(ui_dir, "index.html"))
+
 
 @app.get("/app/{catchall:path}")
 async def serve_react_app(catchall: str):
