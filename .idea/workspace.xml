@@ -6,7 +6,8 @@
   <component name="ChangeListManager">
     <list default="true" id="8e094196-47f9-4b6f-aa09-e2267cdcd33b" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/data/input/latest_uploaded_data.xlsx" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/data/input/latest_uploaded_data.xlsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/data/output/Final_Production_Plan.xlsx" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/data/output/Final_Production_Plan.xlsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/src/logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/logic.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -71,6 +72,7 @@
     &quot;Python.run_batch_simulation.executor&quot;: &quot;Run&quot;,
     &quot;Python.test.executor&quot;: &quot;Run&quot;,
     &quot;Python.update_rm_status.executor&quot;: &quot;Run&quot;,
+    &quot;Python.upload_equipment.executor&quot;: &quot;Run&quot;,
     &quot;Python.upload_packing_po.executor&quot;: &quot;Run&quot;,
     &quot;Python.validators.executor&quot;: &quot;Run&quot;,
     &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,

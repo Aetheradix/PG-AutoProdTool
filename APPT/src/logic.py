@@ -285,10 +285,19 @@ class Scheduler:
 
             desc_lower = str(d.description).lower()
             is_cond = any(kw in desc_lower for kw in config.RULE_CONDITIONER)
+
             if is_cond:
                 tech_type = "Dual"
 
-            tank_config_val = "FMT+MMT" if "Dual" in tech_type else "FMT"
+            # --- DYNAMIC TANK CONFIGURATION ---
+            is_hc_base = (str(d.material_code).strip() == str(config.GCAS_HC_BASE).strip())
+
+            if is_cond or is_hc_base:
+                tank_config_val = "MMT"
+            elif "Dual" in tech_type:
+                tank_config_val = "FMT+MMT"
+            else:
+                tank_config_val = "FMT"
 
             # --- DYNAMIC BATCH IDENTIFIERS ---
             if "Replenishment" in d.description:
