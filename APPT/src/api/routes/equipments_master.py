@@ -40,7 +40,6 @@ async def get_equipments_master():
             """
     SELECT 
         equipment_name,
-        equipment_id,
         equip_type,
         `resource group` AS resource_group,
         status,
@@ -67,7 +66,7 @@ async def create_equipment(equipment: EquipmentCreate):
         engine = get_engine()       
         query = text(
             """
-            INSERT INTO equipment_master (equipment_name, resource group, status, equip_type, description)
+            INSERT INTO equipment_master (equipment_name, `resource group`, status, equip_type, description)
             VALUES (:equipment_name, :resource_group, :status, :equip_type, :description)
         """
         )
@@ -145,33 +144,15 @@ async def create_equipment(equipment: EquipmentCreate):
 #     except Exception as e:
 #         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/{equipment_id}")
-async def delete_equipment(equipment_id: str):
-    try:
-        engine = get_engine()
-        query = text("DELETE FROM equipment_master WHERE equipment_id = :equipment_id")
-
-        with engine.begin() as conn:
-            result = conn.execute(query, {"equipment_id": equipment_id})
-
-            if result.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Equipment not found")
-
-        return {"status": "success", "message": "Equipment deleted successfully"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{equipment_id}")
-async def update_equipment(equipment_id: str, equipment: EquipmentUpdate):
+@router.put("/{equipment_name}")
+async def update_equipment(equipment_name: str, equipment: EquipmentUpdate):
     try:
         engine = get_engine()
 
         update_fields = []
-        params = {"equipment_id": equipment_id}
+        params = {"orig_equipment_name": equipment_name}
 
         if equipment.equipment_name is not None:
             update_fields.append("equipment_name = :equipment_name")
@@ -199,7 +180,7 @@ async def update_equipment(equipment_id: str, equipment: EquipmentUpdate):
         query = text(f"""
             UPDATE equipment_master
             SET {', '.join(update_fields)}
-            WHERE equipment_id = :equipment_id
+            WHERE equipment_name = :orig_equipment_name
         """)
 
         with engine.begin() as conn:
@@ -210,7 +191,7 @@ async def update_equipment(equipment_id: str, equipment: EquipmentUpdate):
 
         return {
             "status": "success",
-            "message": "Equipment updated successfully"
+            "message": f"Equipment '{equipment_name}' updated successfully"
         }
 
     except HTTPException:
@@ -219,25 +200,25 @@ async def update_equipment(equipment_id: str, equipment: EquipmentUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{equipment_id}")
-async def delete_equipment(equipment_id: str):
+@router.delete("/{equipment_name}")
+async def delete_equipment(equipment_name: str):
     try:
         engine = get_engine()
 
         query = text("""
             DELETE FROM equipment_master
-            WHERE equipment_id = :equipment_id
+            WHERE equipment_name = :equipment_name
         """)
 
         with engine.begin() as conn:
-            result = conn.execute(query, {"equipment_id": equipment_id})
+            result = conn.execute(query, {"equipment_name": equipment_name})
 
             if result.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Equipment not found")
 
         return {
             "status": "success",
-            "message": f"Equipment '{equipment_id}' deleted successfully"
+            "message": f"Equipment '{equipment_name}' deleted successfully"
         }
 
     except HTTPException:
