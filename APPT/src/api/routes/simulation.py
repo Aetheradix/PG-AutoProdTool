@@ -79,25 +79,36 @@ def upload_packing_plan(file_path):
                 if isinstance(d_val, datetime): return d_val
                 return None
 
+            # We still parse it so we get a clean Python datetime object
             start_dt = parse_dt(row.get('Start Date'), row.get('Start Time'))
             end_dt = parse_dt(row.get('End Date'), row.get('End Time'))
 
             if start_dt:
                 if not end_dt: end_dt = start_dt
                 data_to_insert.append((
-                    str(row.get('Production Line', '')), str(row.get('Order', '')),
-                    str(row.get('Material', '')), str(row.get('Description', '')),
-                    str(row.get('Batch', '')), start_dt, end_dt,
+                    str(row.get('Production Line', '')),
+                    str(row.get('Order', '')),
+                    str(row.get('Material', '')),
+                    str(row.get('Description', '')),
+                    str(row.get('Batch', '')),
+                    start_dt.date(),  # <-- Extract the Date only
+                    start_dt.time(),  # <-- Extract the Time only
+                    end_dt.date(),  # <-- Extract the Date only
+                    end_dt.time(),  # <-- Extract the Time only
                     float(row.get('Planned Quantity', 0))
                 ))
         except:
             continue
 
     if data_to_insert:
-        stmt = """INSERT INTO packing_po (line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty)
-                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        # Update the INSERT statement with the 4 new columns!
+        stmt = """INSERT INTO packing_po 
+                  (line, order_no, p_code, description, batch_no, start_date, start_time, end_date, end_time, planned_qty)
+                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+
         cursor.executemany(stmt, data_to_insert)
         conn.commit()
+
     cursor.close()
     conn.close()
     return True
@@ -140,7 +151,6 @@ def run_simulation_api(request: SimulationRequest):
 
         print(f"Target Date: {target_dt.strftime('%Y-%m-%d %H:%M')}")
 
-        # --- NEW STEP: UPLOAD THE EXCEL FILE TO SQL FIRST! ---
         load_excel_for_date(target_dt)
 
         parsed_downtimes = []

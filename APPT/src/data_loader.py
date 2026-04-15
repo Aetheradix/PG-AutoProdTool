@@ -148,24 +148,32 @@ class DataLoader:
                 "LINES": []
             }
 
-    def load_packing_plan(self, target_date=None) -> List[Demand]:
+    def load_packing_plan(self, target_date=None):
         print("Loading Packing Plan from SQL (packing_po)...")
         demands = []
         try:
-            # 1. Add the Target Date Filter to the SQL Query
-            query = "SELECT line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty FROM packing_po"
+            # 1. Update the SQL query to pull the new split columns
+            query = "SELECT line, order_no, p_code, description, batch_no, start_date, start_time, end_date, end_time, planned_qty FROM packing_po"
 
             if target_date:
                 # Format the Python datetime into a SQL-friendly string (YYYY-MM-DD)
                 date_str = target_date.strftime('%Y-%m-%d')
-                # Filter so we only grab orders that fall on the chosen day
-                query += f" WHERE DATE(start_datetime) = '{date_str}'"
+
+                query += f" WHERE start_date = '{date_str}'"
                 print(f"   > Filtering orders for date: {date_str}")
 
             df = pd.read_sql(query, db.get_engine())
             if df.empty:
                 print("   > No demands found in DB for this date.")
                 return []
+
+            start_dates = pd.to_datetime(df['start_date'])
+            end_dates = pd.to_datetime(df['end_date'])
+            start_times = pd.to_timedelta(df['start_time'].astype(str))
+            end_times = pd.to_timedelta(df['end_time'].astype(str))
+
+            df['pkg_start_dt'] = start_dates + start_times
+            df['pkg_end_dt'] = end_dates + end_times
 
             for _, row in df.iterrows():
                 try:
@@ -177,8 +185,8 @@ class DataLoader:
                         material_code=str(row['p_code']).strip(),
                         description=str(row['description']).strip(),
                         quantity=qty,
-                        pkg_start_dt=pd.to_datetime(row['start_datetime']),
-                        pkg_end_dt=pd.to_datetime(row['end_datetime']),
+                        pkg_start_dt=row['pkg_start_dt'],  # Use the stitched timestamp
+                        pkg_end_dt=row['pkg_end_dt'],  # Use the stitched timestamp
                         line=str(row['line']).strip()
                     )
                     demands.append(d)
@@ -186,7 +194,6 @@ class DataLoader:
                     pass
 
         except Exception as e:
-            print(f"Error loading packing plan from DB: {e}")
+            print(f"SQL Read Error: {e}")
 
-        print(f"Loaded {len(demands)} demands.")
         return demands
