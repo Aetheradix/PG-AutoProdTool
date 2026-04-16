@@ -29,7 +29,7 @@ def get_engine():
             database = os.getenv("DB_NAME")
 
             # Using mysql-connector-python
-            url = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
+            url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
 
             # Connection Pooling: Keep 5 connections open, recycle them every 30 mins
             _ENGINE = create_engine(
