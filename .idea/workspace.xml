@@ -5,20 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="8e094196-47f9-4b6f-aa09-e2267cdcd33b" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/APPT/run.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/APPT/src/api/__init__.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/1_Install_Dependencies.bat" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/data/input/latest_uploaded_data.xlsx" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/data/input/latest_uploaded_data.xlsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/data/output/Final_Production_Plan.xlsx" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/data/output/Final_Production_Plan.xlsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/src/api/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/api/app.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/src/db.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/src/db.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/static_ui/assets/LoginPage-COcvvBI-.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/static_ui/assets/SignupPage-BgZAPiGb.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/static_ui/assets/UserManagementPage-BK7RFRvd.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/static_ui/assets/index-BFNaYVMb.js" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/static_ui/assets/index-CguXRNPE.css" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/APPT/static_ui/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/static_ui/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/APPT/run.py" beforeDir="false" afterPath="$PROJECT_DIR$/APPT/run.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -93,7 +81,7 @@
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "ai.playground.ignore.import.keys.banner.in.settings": "true",
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "main",
+    "git-widget-placeholder": "SQLite-LocalDB",
     "ignore.virus.scanning.warn.message": "true",
     "junie.onboarding.icon.badge.shown": "true",
     "last_opened_file_path": "C:/Users/Pratyush/Desktop/ARX/ARX-SFA Projects/P&G/PG-AutoProdTool/APPT/src/api",
