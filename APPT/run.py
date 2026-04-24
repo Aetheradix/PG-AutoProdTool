@@ -35,7 +35,7 @@ def open_browser():
     try:
         result = subprocess.run(['cmd', '/c', f'start chrome {url}'], capture_output=True)
         if result.returncode == 0:
-            return  # Success!
+            return
     except Exception:
         pass
 
@@ -43,7 +43,7 @@ def open_browser():
     try:
         result = subprocess.run(['cmd', '/c', f'start msedge {url}'], capture_output=True)
         if result.returncode == 0:
-            return  # Success!
+            return
     except Exception:
         pass
 

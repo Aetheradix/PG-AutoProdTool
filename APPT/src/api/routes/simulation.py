@@ -7,7 +7,7 @@ from typing import List, Optional, Any
 from src.auth import admin_required
 import pandas as pd
 import traceback
-
+import sys
 from src import config, db
 from src.data_loader import DataLoader
 from src.logic import PlanEnricher, Scheduler, TankScheduler, StorageAssigner
@@ -256,4 +256,63 @@ def run_simulation_api(request: SimulationRequest):
 
     except Exception as e:
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload")
+async def generate_from_latest_upload(payload: list[dict]):
+    """
+    Receives JSON from React, saves it as an Excel file,
+    updates the database, and runs the scheduling engine.
+    """
+    print("--- STARTING GENERATION FROM UI UPLOAD ---")
+
+    # 1. Setup paths safely for both local and .exe environments
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+    input_dir = os.path.join(base_dir, "data", "input")
+    os.makedirs(input_dir, exist_ok=True)  # Ensure folder exists
+    file_path = os.path.join(input_dir, "latest_uploaded_data.xlsx")
+
+    try:
+        # 2. Convert React JSON back into the physical Excel file
+        df = pd.DataFrame(payload)
+        df.to_excel(file_path, index=False)
+        print(f"Saved physical file to: {file_path}")
+
+        # 3. Upload to DB using your existing logic
+        upload_success = upload_packing_plan(file_path)
+        if not upload_success:
+            raise Exception("Failed to upload the data into the database.")
+
+        # 4. Initialize Data Loader and fetch the new demands
+        data_loader = DataLoader()
+        demands = data_loader.load_packing_plan()
+
+        if not demands:
+            raise Exception("No valid demands found to schedule.")
+
+        # 5. Run the scheduling engine
+        scheduler = Scheduler(demands)
+        schedule_results = scheduler.run_initial_schedule()
+
+        # 6. Save the final generated plan
+        output_dir = os.path.join(base_dir, "data", "output")
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, "latest_generated_schedule.xlsx")
+
+        scheduler.export_to_excel(output_file)
+
+        return {
+            "status": "success",
+            "message": "File saved and Plan successfully generated!",
+            "demands_processed": len(demands),
+            "output_file": output_file
+        }
+
+    except Exception as e:
+        print(f"Simulation Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
