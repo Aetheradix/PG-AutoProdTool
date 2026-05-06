@@ -118,3 +118,105 @@ async def serve_static_files(file_path: str):
         return FileResponse(full_path)
     # If file doesn't exist, default back to index.html for React SPA logic
     return FileResponse(os.path.join(ui_dir, "index.html"))
+
+
+import shutil
+
+def bootstrap_folders():
+    """
+    Ensures the user has the necessary folder structure
+    and a template file to work with.
+    """
+    # 1. Resolve paths
+    if getattr(sys, 'frozen', False):
+        internal_data = os.path.join(sys._MEIPASS, "data", "input")
+    else:
+        internal_data = os.path.join(os.path.dirname(__file__), "..", "data", "input")
+
+    external_data = os.path.join(os.getcwd(), "data", "input")
+    external_output = os.path.join(os.getcwd(), "data", "output")
+
+    # 2. Create external directories if missing
+    os.makedirs(external_data, exist_ok=True)
+    os.makedirs(external_output, exist_ok=True)
+
+    # 3. Copy template if the input folder is empty
+    if not os.listdir(external_data):
+        try:
+            for item in os.listdir(internal_data):
+                s = os.path.join(internal_data, item)
+                d = os.path.join(external_data, item)
+                if os.path.isfile(s):
+                    shutil.copy2(s, d)
+            print("Successfully bootstrapped template files to external data folder.")
+        except Exception as e:
+            print(f"Migration warning: {e}")
+
+# Call this inside your "if __name__ == '__main__':" block
+
+import uvicorn
+import webbrowser
+import os
+import winreg  # Standard library for Windows Registry access
+
+
+def get_chrome_path():
+    """
+    Looks up the Chrome installation path in the Windows Registry.
+    This is the most reliable way to find applications on VMs.
+    """
+    reg_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+
+    # Check HKEY_LOCAL_MACHINE first (System-wide install)
+    # Then check HKEY_CURRENT_USER (User-level install)
+    for root in [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]:
+        try:
+            with winreg.OpenKey(root, reg_path) as key:
+                path, _ = winreg.QueryValueEx(key, "")
+                if os.path.exists(path):
+                    return path
+        except (FileNotFoundError, OSError):
+            continue
+
+    # Fallback to standard paths if Registry is locked down
+    fallback_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+    ]
+    for path in fallback_paths:
+        if os.path.exists(path):
+            return path
+
+    return None
+
+
+def launch_browser(url):
+    """
+    Attempts to launch Chrome via Registry path,
+    otherwise falls back to system default.
+    """
+    chrome_path = get_chrome_path()
+
+    if chrome_path:
+        try:
+            # Register Chrome as a specific browser type
+            webbrowser.register('chrome', None, webbrowser.BackgroundBrowser(chrome_path))
+            webbrowser.get('chrome').open(url)
+            return
+        except Exception as e:
+            print(f"Registry launch failed: {e}")
+
+    # Final fail-safe: Use whatever the VM thinks is the default browser
+    webbrowser.open(url)
+
+
+# --- START THE SERVER ---
+if __name__ == "__main__":
+    app_url = "http://127.0.0.1:8000"
+
+    # Launch logic
+    launch_browser(app_url)
+
+    # Start the server
+    uvicorn.run(app, host="0.0.0.0", port=8000)
