@@ -2,25 +2,35 @@ import sys
 import os
 import pandas as pd
 
-# --- PATH SETUP ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# --- PATH SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    # Assuming this script might be run from the root or a subfolder
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(current_dir)
+
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
+
 from src import db
 
 
 def main():
     print("--- INSPECTING SKU MASTER & RM STATUS ---")
-    conn = db.get_connection()
-    if not conn:
-        print("DB Connection Failed.")
+
+    # Use the SQLAlchemy engine directly (Pandas prefers this for safe connection pooling)
+    engine = db.get_engine()
+    if not engine:
+        print("DB Engine Connection Failed.")
         return
 
     try:
         # 1. Get SKU Master Columns (Recipes)
+        # ---> ENTERPRISE FIX: MS SQL uses 'TOP 1' instead of 'LIMIT 1', plus the table prefix <---
         print("\nFetching one row from 'sku_master' to see columns...")
-        df_sku = pd.read_sql("SELECT * FROM sku_master LIMIT 1", conn)
+        df_sku = pd.read_sql("SELECT TOP 1 * FROM pg_auto_tool_table_sku_master", engine)
+
         if not df_sku.empty:
             print("Columns in sku_master:")
             # Filter for likely ingredient columns (starting with 'cons_' or similar?)
@@ -33,14 +43,17 @@ def main():
             print("[WARN] 'sku_master' is empty.")
 
         # 2. Get RM Tank Names (Inventory)
+        # ---> ENTERPRISE FIX: Added the table prefix <---
         print("\nFetching 'rm_status_data' tank names...")
-        df_rm = pd.read_sql("SELECT tank_name FROM rm_status_data", conn)
-        print(df_rm['tank_name'].tolist())
+        df_rm = pd.read_sql("SELECT tank_name FROM pg_auto_tool_table_rm_status_data", engine)
+
+        if not df_rm.empty and 'tank_name' in df_rm.columns:
+            print(df_rm['tank_name'].tolist())
+        else:
+            print("[WARN] No tank names found in 'rm_status_data'.")
 
     except Exception as e:
         print(f"Error: {e}")
-    finally:
-        conn.close()
 
 
 if __name__ == "__main__":

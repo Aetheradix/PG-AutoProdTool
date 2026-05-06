@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -7,7 +6,6 @@ import numpy as np
 from sqlalchemy import text
 from src.db import get_engine
 from src.auth import any_user, admin_required
-
 
 router = APIRouter()
 
@@ -24,22 +22,24 @@ class PackingPlanCreate(BaseModel):
 # ─── GET ─────────────────────────────────────────────────────────────────────
 @router.get("/packing-plan")
 async def get_packing_plan(
-    limit: int = Query(
-        default=1000, ge=1, le=5000, description="Number of records to return"
-    ),
+        limit: int = Query(
+            default=1000, ge=1, le=5000, description="Number of records to return"
+        ),
 ) -> Dict[str, Any]:
     """
-    Fetch packing plan data from packing_po table.
+    Fetch packing plan data from the production PO table.
     """
     try:
         engine = get_engine()
-        query = text("SELECT * FROM packing_po LIMIT :limit")
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
+
+        # ---> ENTERPRISE FIX: MS SQL uses 'TOP' instead of 'LIMIT' and needs table prefix <---
+        query = text("SELECT TOP (:limit) * FROM pg_auto_tool_table_packing_po")
         df = pd.read_sql(query, engine, params={"limit": limit})
 
-        # NaN / Inf → None for JSON safety
-        df = df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(
-            pd.notnull(df), None
-        )
+        # NaN / Inf → None for JSON safety (Enterprise cleaning)
+        df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
 
         return {
             "status": "success",
@@ -47,8 +47,6 @@ async def get_packing_plan(
             "data": df.to_dict(orient="records"),
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Error fetching packing plan: {str(e)}"
@@ -61,45 +59,48 @@ async def create_packing_plan(data: PackingPlanCreate):
     """Create a new packing plan record."""
     try:
         engine = get_engine()
-        fields = data.model_dump(exclude_unset=True)
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
 
+        fields = data.model_dump(exclude_unset=True)
         if not fields:
             raise HTTPException(status_code=400, detail="No data provided")
 
         columns = ", ".join(fields.keys())
         placeholders = ", ".join([f":{k}" for k in fields.keys()])
 
+        # ---> ENTERPRISE FIX: Table Prefix <---
         insert_query = text(
-            f"INSERT INTO packing_po ({columns}) VALUES ({placeholders})"
+            f"INSERT INTO pg_auto_tool_table_packing_po ({columns}) VALUES ({placeholders})"
         )
 
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             conn.execute(insert_query, fields)
-            conn.commit()
 
         return {
             "status": "success",
             "message": "Packing plan record created successfully",
         }
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Error creating packing plan: {str(e)}"
         )
 
 
-# ─── PUT ─────────────────────────────────────────────────────────────────────
+# ─── PUT / PATCH ─────────────────────────────────────────────────────────────
 @router.put("/packing-plan/{record_id}", dependencies=[Depends(admin_required)])
 @router.patch("/packing-plan/{record_id}", dependencies=[Depends(admin_required)])
 async def update_packing_plan(record_id: str, update_data: PackingPlanUpdate):
     """Update a packing plan record by its id."""
     try:
         engine = get_engine()
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
 
         # Check if record exists
-        check_query = text("SELECT id FROM packing_po WHERE id = :id")
-        with engine.connect() as conn:
+        check_query = text("SELECT id FROM pg_auto_tool_table_packing_po WHERE id = :id")
+
+        with engine.begin() as conn:
             result = conn.execute(check_query, {"id": record_id}).fetchone()
             if not result:
                 raise HTTPException(
@@ -112,13 +113,12 @@ async def update_packing_plan(record_id: str, update_data: PackingPlanUpdate):
                 return {"status": "success", "message": "No fields to update"}
 
             update_parts = [f"{col} = :{col}" for col in fields_to_update.keys()]
-            update_query_str = f"UPDATE packing_po SET {', '.join(update_parts)} WHERE id = :record_id"
+            update_query_str = f"UPDATE pg_auto_tool_table_packing_po SET {', '.join(update_parts)} WHERE id = :record_id"
 
             params = fields_to_update
             params["record_id"] = record_id
 
             conn.execute(text(update_query_str), params)
-            conn.commit()
 
         return {
             "status": "success",
@@ -138,9 +138,12 @@ async def delete_packing_plan(record_id: str):
     """Delete a packing plan record by its id."""
     try:
         engine = get_engine()
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
 
-        check_query = text("SELECT id FROM packing_po WHERE id = :id")
-        with engine.connect() as conn:
+        check_query = text("SELECT id FROM pg_auto_tool_table_packing_po WHERE id = :id")
+
+        with engine.begin() as conn:
             result = conn.execute(check_query, {"id": record_id}).fetchone()
             if not result:
                 raise HTTPException(
@@ -148,9 +151,8 @@ async def delete_packing_plan(record_id: str):
                     detail=f"Record with id {record_id} not found",
                 )
 
-            delete_query = text("DELETE FROM packing_po WHERE id = :id")
+            delete_query = text("DELETE FROM pg_auto_tool_table_packing_po WHERE id = :id")
             conn.execute(delete_query, {"id": record_id})
-            conn.commit()
 
         return {
             "status": "success",

@@ -34,73 +34,64 @@ class ProductionScheduleCreate(ProductionScheduleUpdate):
     batch_id: str
 
 
+# ─── GANTT CHART ENDPOINTS ───────────────────────────────────────────────────
+
 @router.get("/gantt", dependencies=[Depends(any_user)])
 async def get_gantt_chart_data():
     """
-    Returns production schedule data grouped for Gantt chart.
-    Structure:
-    - 6T  -> { tank_config: [ ...batches from production_schedule ] }
-    - 12T -> { tank_config: [ ...batches from production_schedule ] }
-    - Tanks -> [ ...flat list of events from timeline_events where resource is a tank ]
+    Returns production schedule data from the MASTER table.
     """
     try:
         engine = get_engine()
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
 
-        # 1. Fetch data from production_schedule for 6T and 12T
-        ps_query = text("SELECT * FROM production_schedule")
+        # ---> ENTERPRISE FIX: Added table prefix <---
+        ps_query = text("SELECT * FROM pg_auto_tool_table_production_schedule")
         ps_df = pd.read_sql(ps_query, engine)
-        ps_df = ps_df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(
-            pd.notnull(ps_df), None
-        )
 
-       
+        # Clean data for JSON serialization
+        ps_df = ps_df.replace({np.nan: None, np.inf: None, -np.inf: None})
+
         return {
             "status": "success",
             "message": "Gantt chart data retrieved successfully",
-            "data": ps_df.to_dict(
-                orient="records"
-            ),  # Return as flat list for frontend grouping
+            "data": ps_df.to_dict(orient="records")
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching Gantt chart data: {str(e)}"
-        )
-    
-# GHANTT CHART EDITING AND TABLE VIEW ENDPOINTS BELOW
+        raise HTTPException(status_code=500, detail=f"Error fetching Gantt data: {str(e)}")
+
+
 @router.get("/gantt-edit")
-async def get_gantt_chart_data():
+async def get_gantt_edit_data():
     """
-    Returns production schedule data grouped for Gantt chart.
-    Structure:
-    - 6T  -> { tank_config: [ ...batches from production_schedule_editable ] }
-    - 12T -> { tank_config: [ ...batches from production_schedule_editable ] }
-    - Tanks -> [ ...flat list of events from timeline_events where resource is a tank ]
+    Returns data from the EDITABLE sandbox table.
     """
     try:
         engine = get_engine()
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
 
-        # 1. Fetch data from production_schedule_editable for 6T and 12T
-        ps_query = text("SELECT * FROM production_schedule_editable")
+        # ---> ENTERPRISE FIX: Added table prefix <---
+        ps_query = text("SELECT * FROM pg_auto_tool_table_production_schedule_editable")
         ps_df = pd.read_sql(ps_query, engine)
-        ps_df = ps_df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(
-            pd.notnull(ps_df), None
-        )
 
-       
+        ps_df = ps_df.replace({np.nan: None, np.inf: None, -np.inf: None})
+
         return {
             "status": "success",
-            "message": "Gantt chart data retrieved successfully",
-            "data": ps_df.to_dict(
-                orient="records"
-            ),  # Return as flat list for frontend grouping
+            "message": "Editable Gantt data retrieved successfully",
+            "data": ps_df.to_dict(orient="records")
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching Gantt chart data: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error fetching editable Gantt data: {str(e)}")
+
 
 @router.put("/gantt-edit/{batch_id}")
-async def update_ghantt_data(batch_id: str, payload: dict):
+async def update_ghantt_batch(batch_id: str, payload: dict):
+    """
+    Updates start/end times in the editable table (Drag-and-Drop support).
+    """
     try:
         start_time = payload.get("start_time")
         end_time = payload.get("end_time")
@@ -109,59 +100,58 @@ async def update_ghantt_data(batch_id: str, payload: dict):
             raise HTTPException(status_code=400, detail="start_time and end_time are required")
 
         engine = get_engine()
+        # ---> ENTERPRISE FIX: Added table prefix <---
         query = text(
             """
-            UPDATE production_schedule_editable
+            UPDATE pg_auto_tool_table_production_schedule_editable
             SET mkg_start_time = :start_time,
                 mkg_end_time = :end_time
             WHERE batch_id = :batch_id
             """
         )
 
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             conn.execute(query, {
                 "start_time": start_time,
                 "end_time": end_time,
                 "batch_id": batch_id
             })
-            conn.commit()
 
-        return {"success": True, "message": f"Event {batch_id} updated successfully"}
+        return {"success": True, "message": f"Batch {batch_id} shifted successfully"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
 
-    
-# --------------------------------Table View-----------------------------------
+
+# ─── TABLE VIEW (PAGINATED) ──────────────────────────────────────────────────
+
 @router.get("")
 async def get_production_schedule(
-    page: int = Query(default=1, ge=1, description="Page number"),
-    limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
+        page: int = Query(default=1, ge=1, description="Page number"),
+        limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
 ):
-    """
-    Returns production schedule data with pagination.
-    """
     try:
         engine = get_engine()
         offset = (page - 1) * limit
 
-        # Get total count
-        count_query = text("SELECT COUNT(*) FROM production_schedule")
+        # ---> ENTERPRISE FIX: Added table prefix <---
+        count_query = text("SELECT COUNT(*) FROM pg_auto_tool_table_production_schedule")
         with engine.connect() as conn:
             total_records = conn.execute(count_query).scalar()
 
-        total_pages = (total_records + limit - 1) // limit
+        total_pages = (total_records + limit - 1) // limit if total_records else 0
 
-        query = text("SELECT * FROM production_schedule LIMIT :limit OFFSET :offset")
+        # ---> ENTERPRISE FIX: MS SQL OFFSET/FETCH syntax <---
+        query = text("""
+            SELECT * FROM pg_auto_tool_table_production_schedule 
+            ORDER BY mkg_start_time ASC, batch_id
+            OFFSET :offset ROWS 
+            FETCH NEXT :limit ROWS ONLY
+        """)
+
         df = pd.read_sql(query, engine, params={"limit": limit, "offset": offset})
+        df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
 
-        # Replace NaN, Inf, -Inf with None for JSON serialization
-        df = df.replace({np.nan: np.nan, np.inf: np.nan, -np.inf: np.nan}).where(
-            pd.notnull(df), None
-        )
-
-        # Group by shift and then by system
         grouped_data = {}
         if not df.empty:
             for shift, shift_group in df.groupby("shift"):
@@ -181,137 +171,77 @@ async def get_production_schedule(
             },
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching production schedule: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error fetching schedule: {str(e)}")
 
 
-# ------------------------------------------------------------------------------
+# ─── CRUD OPERATIONS ─────────────────────────────────────────────────────────
+
 @router.post("", dependencies=[Depends(admin_required)])
 async def create_production_schedule(data: ProductionScheduleCreate):
-    """
-    Creates a new production schedule record in the database.
-    """
     try:
         engine = get_engine()
+        check_query = text("SELECT batch_id FROM pg_auto_tool_table_production_schedule WHERE batch_id = :batch_id")
 
-        check_query = text(
-            "SELECT batch_id FROM production_schedule WHERE batch_id = :batch_id"
-        )
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             result = conn.execute(check_query, {"batch_id": data.batch_id}).fetchone()
             if result:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Record with batch_id {data.batch_id} already exists",
-                )
+                raise HTTPException(status_code=409, detail=f"Batch {data.batch_id} already exists")
 
             fields = data.model_dump(exclude_unset=True)
-
             columns = ", ".join(fields.keys())
             placeholders = ", ".join([f":{k}" for k in fields.keys()])
 
             insert_query = text(
-                f"INSERT INTO production_schedule ({columns}) VALUES ({placeholders})"
-            )
-
+                f"INSERT INTO pg_auto_tool_table_production_schedule ({columns}) VALUES ({placeholders})")
             conn.execute(insert_query, fields)
-            conn.commit()
 
-        return {
-            "status": "success",
-            "message": f"Production schedule record {data.batch_id} created successfully",
-        }
-    except HTTPException:
-        raise
+        return {"status": "success", "message": f"Batch {data.batch_id} created successfully"}
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error creating production schedule: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/{batch_id}", dependencies=[Depends(admin_required)])
 @router.patch("/{batch_id}", dependencies=[Depends(admin_required)])
-async def update_production_schedule(
-    batch_id: str, update_data: ProductionScheduleUpdate
-):
-    """
-    Updates a production schedule record in the database.
-    """
+async def update_production_schedule(batch_id: str, update_data: ProductionScheduleUpdate):
     try:
         engine = get_engine()
+        check_query = text("SELECT batch_id FROM pg_auto_tool_table_production_schedule WHERE batch_id = :batch_id")
 
-        # Check if record exists
-        check_query = text(
-            "SELECT batch_id FROM production_schedule WHERE batch_id = :batch_id"
-        )
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             result = conn.execute(check_query, {"batch_id": batch_id}).fetchone()
             if not result:
-                raise HTTPException(
-                    status_code=404, detail=f"Record with batch_id {batch_id} not found"
-                )
+                raise HTTPException(status_code=404, detail="Batch not found")
 
-            # Prepare update query
             fields_to_update = update_data.model_dump(exclude_unset=True)
             if not fields_to_update:
                 return {"status": "success", "message": "No fields to update"}
 
             update_parts = [f"{col} = :{col}" for col in fields_to_update.keys()]
-            update_query_str = f"UPDATE production_schedule SET {', '.join(update_parts)} WHERE batch_id = :batch_id_id"
+            update_query_str = f"UPDATE pg_auto_tool_table_production_schedule SET {', '.join(update_parts)} WHERE batch_id = :batch_id_id"
 
             params = fields_to_update
             params["batch_id_id"] = batch_id
-
             conn.execute(text(update_query_str), params)
-            conn.commit()
 
-        return {
-            "status": "success",
-            "message": f"Production schedule record {batch_id} updated successfully",
-        }
-    except HTTPException:
-        raise
+        return {"status": "success", "message": f"Batch {batch_id} updated successfully"}
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error updating production schedule: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/{batch_id}", dependencies=[Depends(admin_required)])
 async def delete_production_schedule(batch_id: str):
-    """
-    Deletes a production schedule record from the database.
-    """
     try:
         engine = get_engine()
+        check_query = text("SELECT batch_id FROM pg_auto_tool_table_production_schedule WHERE batch_id = :batch_id")
 
-        # Check if record exists
-        check_query = text(
-            "SELECT batch_id FROM production_schedule WHERE batch_id = :batch_id"
-        )
-
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             result = conn.execute(check_query, {"batch_id": batch_id}).fetchone()
             if not result:
-                raise HTTPException(
-                    status_code=404, detail=f"Record with batch_id {batch_id} not found"
-                )
+                raise HTTPException(status_code=404, detail="Batch not found")
 
-            # Delete query
-            delete_query = text(
-                "DELETE FROM production_schedule WHERE batch_id = :batch_id"
-            )
-            conn.execute(delete_query, {"batch_id": batch_id})
-            conn.commit()
+            conn.execute(text("DELETE FROM pg_auto_tool_table_production_schedule WHERE batch_id = :batch_id"),
+                         {"batch_id": batch_id})
 
-        return {
-            "status": "success",
-            "message": f"Production schedule record {batch_id} deleted successfully",
-        }
-    except HTTPException:
-        raise
+        return {"status": "success", "message": f"Batch {batch_id} deleted successfully"}
     except Exception as e:
-        raise HTTPException(
-            status_code=500, detail=f"Error deleting production schedule: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))

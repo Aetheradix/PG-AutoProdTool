@@ -19,42 +19,54 @@ class DataLoader:
     def load_washout_matrices(self) -> Dict[str, Dict]:
         print("Loading Washout Matrices from SQL...")
         matrices = {}
-        sources = {'FMT': 'fmt_wo_matrix', 'MMT_6T': 'mmt_6t_matrix', 'MMT_12T': 'mmt_12t_matrix'}
+        # ---> ENTERPRISE FIX: Added table prefixes <---
+        sources = {
+            'FMT': 'pg_auto_tool_table_fmt_wo_matrix',
+            'MMT_6T': 'pg_auto_tool_table_mmt_6t_matrix',
+            'MMT_12T': 'pg_auto_tool_table_mmt_12t_matrix'
+        }
+
         for key, table_name in sources.items():
             df = db.fetch_table(table_name)
-            if df.empty:
+            if df is None or df.empty:
                 matrices[key] = {}
                 continue
+
             mat_dict = {}
-            df.columns = [c.lower() for c in df.columns]
+            df.columns = [str(c).lower() for c in df.columns]
             for _, row in df.iterrows():
                 src = self._clean_gcas(row.get('source_gcas'))
                 tgt = self._clean_gcas(row.get('target_gcas'))
                 w_type = str(row.get('washout_type', '')).upper()
-                duration = config.WASHOUT_DURATION if "WASH" in w_type else 0
-                if src and tgt: mat_dict[(src, tgt)] = duration
+                duration = getattr(config, 'WASHOUT_DURATION', 20) if "WASH" in w_type else 0
+                if src and tgt:
+                    mat_dict[(src, tgt)] = duration
             matrices[key] = mat_dict
+
         return matrices
 
     def load_bulk_variant_map(self) -> Dict[str, VariantInfo]:
         print(f"Loading Bulk Variant Map from SQL (bulk_details)...")
-        df = db.fetch_table("bulk_details")
-        if df.empty: return {}
+        # ---> ENTERPRISE FIX: Added table prefix <---
+        df = db.fetch_table("pg_auto_tool_table_bulk_details")
+        if df is None or df.empty:
+            return {}
+
         variant_map = {}
         for _, row in df.iterrows():
             desc = str(row.get('description', '')).strip()
             gcas = self._clean_gcas(row.get('bulk_gcas', ''))
-            weight = float(row.get('weight_per_container_kg', 0.0))
+            weight = float(row.get('weight_per_container_kg', 0.0) or 0.0)
             if desc and gcas:
                 variant_map[desc] = VariantInfo(gcas=gcas, weight_per_container=weight)
         return variant_map
 
     def load_master_data(self) -> Dict[str, SKUMeta]:
-        import pandas as pd
-
         print(f"Loading Master SKU & Recipe Data from SQL (sku_master)...")
-        df = db.fetch_table("sku_master")
-        if df is None or df.empty: return {}
+        # ---> ENTERPRISE FIX: Added table prefix <---
+        df = db.fetch_table("pg_auto_tool_table_sku_master")
+        if df is None or df.empty:
+            return {}
 
         # 1. BULLETPROOF THE COLUMNS: Make everything lowercase and replace spaces with underscores
         df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
@@ -117,10 +129,15 @@ class DataLoader:
 
     def load_active_equipment(self) -> dict:
         print("Loading Active Equipment from SQL (equipment_master)...")
+        engine = db.get_engine()
+        if not engine:
+            print("[WARN] DB Engine not found for equipment.")
+            return {"PORTABLE_TANKS": [], "RONCHI_TANKS": [], "LINES": []}
+
         try:
-            # Only pull equipment that is currently marked Active
-            query = "SELECT * FROM equipment_master WHERE LOWER(status) = 'active'"
-            df = pd.read_sql(query, db.get_engine())
+            # ---> ENTERPRISE FIX: Added table prefix <---
+            query = "SELECT * FROM pg_auto_tool_table_equipment_master WHERE LOWER(status) = 'active'"
+            df = pd.read_sql(query, engine)
 
             # Clean up column names in case they have spaces (like 'resource group')
             df.columns = [str(col).strip().lower().replace(' ', '_') for col in df.columns]
@@ -151,26 +168,32 @@ class DataLoader:
     def load_packing_plan(self, target_date=None):
         print("Loading Packing Plan from SQL (packing_po)...")
         demands = []
+        engine = db.get_engine()
+        if not engine:
+            print("[WARN] DB Engine not found for packing plan.")
+            return []
+
         try:
-            # 1. Update the SQL query to pull the new split columns
-            query = "SELECT line, order_no, p_code, description, batch_no, start_date, start_time, end_date, end_time, planned_qty FROM packing_po"
+            # ---> ENTERPRISE FIX: Uses the config variable we set up earlier <---
+            table_name = getattr(config, 'TABLE_PACKING_PO', 'pg_auto_tool_table_packing_po')
+            query = f"SELECT line, order_no, p_code, description, batch_no, start_date, start_time, end_date, end_time, planned_qty FROM {table_name}"
 
             if target_date:
                 # Format the Python datetime into a SQL-friendly string (YYYY-MM-DD)
                 date_str = target_date.strftime('%Y-%m-%d')
-
                 query += f" WHERE start_date = '{date_str}'"
                 print(f"   > Filtering orders for date: {date_str}")
 
-            df = pd.read_sql(query, db.get_engine())
+            df = pd.read_sql(query, engine)
             if df.empty:
                 print("   > No demands found in DB for this date.")
                 return []
 
-            start_dates = pd.to_datetime(df['start_date'])
-            end_dates = pd.to_datetime(df['end_date'])
-            start_times = pd.to_timedelta(df['start_time'].astype(str))
-            end_times = pd.to_timedelta(df['end_time'].astype(str))
+            # Added errors='coerce' so a single bad cell value won't crash the entire load
+            start_dates = pd.to_datetime(df['start_date'], errors='coerce')
+            end_dates = pd.to_datetime(df['end_date'], errors='coerce')
+            start_times = pd.to_timedelta(df['start_time'].astype(str), errors='coerce')
+            end_times = pd.to_timedelta(df['end_time'].astype(str), errors='coerce')
 
             df['pkg_start_dt'] = start_dates + start_times
             df['pkg_end_dt'] = end_dates + end_times
@@ -178,19 +201,20 @@ class DataLoader:
             for _, row in df.iterrows():
                 try:
                     qty = float(row['planned_qty'])
-                    if qty <= 0: continue
+                    if qty <= 0 or pd.isna(row['pkg_start_dt']):
+                        continue
 
                     d = Demand(
                         order_id=str(row['order_no']).strip(),
                         material_code=str(row['p_code']).strip(),
                         description=str(row['description']).strip(),
                         quantity=qty,
-                        pkg_start_dt=row['pkg_start_dt'],  # Use the stitched timestamp
-                        pkg_end_dt=row['pkg_end_dt'],  # Use the stitched timestamp
+                        pkg_start_dt=row['pkg_start_dt'],
+                        pkg_end_dt=row['pkg_end_dt'],
                         line=str(row['line']).strip()
                     )
                     demands.append(d)
-                except Exception as e:
+                except Exception:
                     pass
 
         except Exception as e:

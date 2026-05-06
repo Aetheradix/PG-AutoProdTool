@@ -27,30 +27,41 @@ class BPRPDRResponse(BaseModel):
 @router.get("/")
 @router.get("")
 async def get_bpr_pdr(
-    page: int = Query(default=1, ge=1, description="Page number"),
-    limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
+        page: int = Query(default=1, ge=1, description="Page number"),
+        limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
 ):
     """
     Returns BPR-PDR data with pagination.
     """
     try:
         engine = get_engine()
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
+
         offset = (page - 1) * limit
 
-        # Get total count
-        count_query = text("SELECT COUNT(*) FROM bpr_pdr")
+        # ---> ENTERPRISE FIX: Added table prefix <---
+        count_query = text("SELECT COUNT(*) FROM pg_auto_tool_table_bpr_pdr")
         with engine.connect() as conn:
             total_records = conn.execute(count_query).scalar()
 
-        total_pages = (total_records + limit - 1) // limit
+        # Added safety check in case the table is completely empty
+        total_pages = (total_records + limit - 1) // limit if total_records else 0
 
-        query = text("SELECT * FROM bpr_pdr LIMIT :limit OFFSET :offset")
+        # ---> ENTERPRISE FIX: MS SQL requires 'ORDER BY ... OFFSET ... FETCH' instead of 'LIMIT/OFFSET' <---
+        query = text("""
+            SELECT * FROM pg_auto_tool_table_bpr_pdr 
+            ORDER BY sr_no 
+            OFFSET :offset ROWS 
+            FETCH NEXT :limit ROWS ONLY
+        """)
+
         df = pd.read_sql(query, engine, params={"limit": limit, "offset": offset})
-        
+
         # Replace NaN, Inf, -Inf with None for JSON serialization
         df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
         data = df.to_dict(orient="records")
-        
+
         return {
             "status": "success",
             "message": "BPR-PDR data retrieved successfully",

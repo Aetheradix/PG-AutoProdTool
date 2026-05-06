@@ -7,7 +7,6 @@ from sqlalchemy import text
 import pandas as pd
 import numpy as np
 
-
 router = APIRouter()
 
 
@@ -25,27 +24,39 @@ class BulkDetailsUpdate(BaseModel):
 
 @router.get("", dependencies=[Depends(any_user)])
 async def get_bulk_details(
-    page: int = Query(default=1, ge=1, description="Page number"),
-    limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
+        page: int = Query(default=1, ge=1, description="Page number"),
+        limit: int = Query(default=10, ge=1, le=1000, description="Items per page"),
 ):
     """
     Returns bulk details data with pagination.
     """
     try:
         engine = get_engine()
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
+
         offset = (page - 1) * limit
 
-        # Get total count
-        count_query = text("SELECT COUNT(*) FROM bulk_details")
+        # ---> ENTERPRISE FIX: Added table prefix <---
+        count_query = text("SELECT COUNT(*) FROM pg_auto_tool_table_bulk_details")
         with engine.connect() as conn:
             total_records = conn.execute(count_query).scalar()
 
-        total_pages = (total_records + limit - 1) // limit
+        # Added safety check in case the table is completely empty
+        total_pages = (total_records + limit - 1) // limit if total_records else 0
 
-        query = text("SELECT * FROM bulk_details LIMIT :limit OFFSET :offset")
+        # ---> ENTERPRISE FIX: MS SQL requires 'ORDER BY ... OFFSET ... FETCH' <---
+        query = text("""
+            SELECT * FROM pg_auto_tool_table_bulk_details 
+            ORDER BY id 
+            OFFSET :offset ROWS 
+            FETCH NEXT :limit ROWS ONLY
+        """)
+
         df = pd.read_sql(query, engine, params={"limit": limit, "offset": offset})
         df = df.replace({np.nan: None})
         data = df.to_dict(orient="records")
+
         return {
             "status": "success",
             "message": "Bulk details data retrieved successfully",
@@ -75,19 +86,25 @@ async def create_bulk_details(data: BulkDetailsCreate):
     """
     try:
         engine = get_engine()
-        
-        
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
+
         fields = data.model_dump(exclude_unset=True)
-        
+
         columns = ", ".join(fields.keys())
         placeholders = ", ".join([f":{k}" for k in fields.keys()])
-        
-        insert_query = text(f"INSERT INTO bulk_details ({columns}) VALUES ({placeholders})")
-        
-        with engine.connect() as conn:
+
+        # ---> ENTERPRISE FIX: Use OUTPUT INSERTED.id instead of result.lastrowid <---
+        insert_query = text(f"""
+            INSERT INTO pg_auto_tool_table_bulk_details ({columns}) 
+            OUTPUT INSERTED.id 
+            VALUES ({placeholders})
+        """)
+
+        with engine.begin() as conn:
+            # fetchone()[0] safely grabs the ID returned by OUTPUT INSERTED.id
             result = conn.execute(insert_query, fields)
-            conn.commit()
-            new_id = result.lastrowid
+            new_id = result.scalar()
 
         return {
             "status": "success",
@@ -110,10 +127,13 @@ async def update_bulk_details(id: int, update_data: BulkDetailsUpdate):
     """
     try:
         engine = get_engine()
-        
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
+
         # Check if record exists
-        check_query = text("SELECT id FROM bulk_details WHERE id = :id")
-        with engine.connect() as conn:
+        check_query = text("SELECT id FROM pg_auto_tool_table_bulk_details WHERE id = :id")
+
+        with engine.begin() as conn:
             result = conn.execute(check_query, {"id": id}).fetchone()
             if not result:
                 raise HTTPException(status_code=404, detail=f"Bulk detail with ID {id} not found")
@@ -124,13 +144,12 @@ async def update_bulk_details(id: int, update_data: BulkDetailsUpdate):
                 return {"status": "success", "message": "No fields to update"}
 
             update_parts = [f"{col} = :{col}" for col in fields_to_update.keys()]
-            update_query_str = f"UPDATE bulk_details SET {', '.join(update_parts)} WHERE id = :id_val"
-            
+            update_query_str = f"UPDATE pg_auto_tool_table_bulk_details SET {', '.join(update_parts)} WHERE id = :id_val"
+
             params = fields_to_update
             params["id_val"] = id
-            
+
             conn.execute(text(update_query_str), params)
-            conn.commit()
 
         return {
             "status": "success",
@@ -152,19 +171,20 @@ async def delete_bulk_details(id: int):
     """
     try:
         engine = get_engine()
-        
+        if not engine:
+            raise HTTPException(status_code=500, detail="Database connection failed.")
+
         # Check if record exists
-        check_query = text("SELECT id FROM bulk_details WHERE id = :id")
-        
-        with engine.connect() as conn:
+        check_query = text("SELECT id FROM pg_auto_tool_table_bulk_details WHERE id = :id")
+
+        with engine.begin() as conn:
             result = conn.execute(check_query, {"id": id}).fetchone()
             if not result:
                 raise HTTPException(status_code=404, detail=f"Bulk detail with ID {id} not found")
 
             # Delete query
-            delete_query = text("DELETE FROM bulk_details WHERE id = :id")
+            delete_query = text("DELETE FROM pg_auto_tool_table_bulk_details WHERE id = :id")
             conn.execute(delete_query, {"id": id})
-            conn.commit()
 
         return {
             "status": "success",

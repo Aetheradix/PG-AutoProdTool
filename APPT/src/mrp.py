@@ -13,8 +13,15 @@ class MaterialPlanner:
 
     def _load_inventory(self):
         print("--- Loading Inventory for MRP ---")
+        engine = db.get_engine()
+        if not engine:
+            print("[MRP Error] Database engine not initialized. Cannot load inventory.")
+            return
+
         try:
-            df = pd.read_sql("SELECT tank_name, current_value FROM rm_status_data", db.get_engine())
+            # ---> ENTERPRISE FIX: Added table prefix <---
+            df = pd.read_sql("SELECT tank_name, current_value FROM pg_auto_tool_table_rm_status_data", engine)
+
             raw_levels = dict(zip(df['tank_name'], df['current_value']))
             for ing_key, tank_list in config.MRP_INGREDIENTS.items():
                 total = 0.0
@@ -44,17 +51,17 @@ class MaterialPlanner:
             desc_lower = str(b.desc).lower()
 
             if evt["type"] == "PRODUCE":
-                produced_qty_kg = b.total_msu * config.MSU_UNIT_KG
+                produced_qty_kg = b.total_msu * getattr(config, 'MSU_UNIT_KG', 2571.0)
 
                 if b.sku_code == config.GCAS_CLIMBAZOLE or "climbazole" in desc_lower:
-                    sim_inv["climbazole"] += produced_qty_kg
+                    sim_inv["climbazole"] = sim_inv.get("climbazole", 0.0) + produced_qty_kg
                     # Capacity Alert Logic
                     if sim_inv["climbazole"] > 3000.0:
                         warn_msg = "WARN: MAX CAP (3T) EXCEEDED"
                         b.mrp_status = warn_msg if b.mrp_status == "OK" else f"{b.mrp_status} | {warn_msg}"
 
                 elif b.sku_code == config.GCAS_HC_BASE or "hc base" in desc_lower:
-                    sim_inv["hc_base"] += produced_qty_kg
+                    sim_inv["hc_base"] = sim_inv.get("hc_base", 0.0) + produced_qty_kg
                     # Capacity Alert Logic
                     if sim_inv["hc_base"] > 12000.0:
                         warn_msg = "WARN: MAX CAP (12T) EXCEEDED"
@@ -85,7 +92,7 @@ class MaterialPlanner:
 
                             if ing_name == "hc_base":
                                 can_replenish = True
-                                rep_gcas = config.GCAS_HC_BASE
+                                rep_gcas = getattr(config, 'GCAS_HC_BASE', '')
                                 rep_desc = "Auto-Replenishment HC Base (12T)"
                                 qty_to_order = 5900.0
                                 # Dynamic Safety Clamp to strictly prevent overflow above 12T (12000kg)
@@ -94,7 +101,7 @@ class MaterialPlanner:
 
                             elif ing_name == "climbazole":
                                 can_replenish = True
-                                rep_gcas = config.GCAS_CLIMBAZOLE
+                                rep_gcas = getattr(config, 'GCAS_CLIMBAZOLE', '')
                                 rep_desc = "Auto-Replenishment Climbazole"
                                 qty_to_order = 1200.0
                                 # Dynamic Safety Clamp to strictly prevent overflow above 3T (3000kg)

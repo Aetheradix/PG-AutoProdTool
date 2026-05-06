@@ -2,25 +2,31 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# --- PATHS SETUP ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-base_dir_check = os.path.dirname(current_dir)
-if base_dir_check not in sys.path:
-    sys.path.insert(0, base_dir_check)
+# --- PATHS SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    # Running as compiled .exe
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # Running as standard script
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(current_dir)
 
-BASE_DIR = base_dir_check
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 INPUT_DIR = os.path.join(BASE_DIR, 'data', 'input')
 OUTPUT_DIR = os.path.join(BASE_DIR, 'data', 'output')
 
 os.makedirs(INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Load the environment variables
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 
+# --- MS SQL DB CREDENTIALS ---
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "3306")
+DB_SERVER = os.getenv("DB_SERVER", "localhost") # Swapped HOST/PORT for SERVER
 DB_NAME = os.getenv("DB_NAME")
 
 # --- FILE NAMES ---
@@ -51,7 +57,8 @@ SYSTEM_COL_MAP = {
 }
 
 # --- PACKING PO CONFIG (SQL) ---
-TABLE_PACKING_PO = "packing_po"
+# ---> ENTERPRISE FIX: Added table prefix <---
+TABLE_PACKING_PO = "pg_auto_tool_table_packing_po"
 COL_SQL_LINE = "line"
 COL_SQL_ORDER = "order_no"
 COL_SQL_MATERIAL = "p_code"

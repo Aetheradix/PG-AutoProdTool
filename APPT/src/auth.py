@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -10,26 +10,30 @@ from src.db import get_engine
 
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-for-dev-only")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 600 
+ACCESS_TOKEN_EXPIRE_MINUTES = 600
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
 
+
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
+
 
 def get_password_hash(password):
     return pwd_context.hash(password)
 
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
@@ -44,32 +48,33 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    
+
     engine = get_engine()
+    if not engine:
+        raise HTTPException(status_code=500, detail="Database connection failed.")
+
     with engine.connect() as conn:
+        # ---> ENTERPRISE FIX: Table Prefix & Mappings extraction <---
         result = conn.execute(
-            text("SELECT id, username, role, full_name FROM users WHERE username = :username"),
+            text("SELECT id, username, role, full_name FROM pg_auto_tool_table_users WHERE username = :username"),
             {"username": username}
-        ).fetchone()
-        
+        ).mappings().fetchone()
+
         if result is None:
             raise credentials_exception
-            
-        return {
-            "id": result[0],
-            "username": result[1],
-            "role": result[2],
-            "full_name": result[3]
-        }
+
+        return dict(result)
+
 
 def check_role(allowed_roles: List[str]):
     async def role_checker(current_user: dict = Depends(get_current_user)):
-        if current_user["role"] not in allowed_roles:
+        if current_user.get("role") not in allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to perform this action"
             )
         return current_user
+
     return role_checker
 
 

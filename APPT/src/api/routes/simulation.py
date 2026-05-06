@@ -18,6 +18,14 @@ from src.plan_exporter import upload_to_sql
 
 router = APIRouter()
 
+# --- PATH SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(
+        os.path.dirname(os.path.dirname(current_dir)))
+
 
 # --- 1. VALIDATION MODELS ---
 class DowntimeBlock(BaseModel):
@@ -30,6 +38,7 @@ class DowntimeBlock(BaseModel):
     start: Optional[str] = None
     end: Optional[str] = None
     reason: Optional[str] = "Maintenance"
+
 
 class SimulationRequest(BaseModel):
     target_date: Optional[str] = None
@@ -63,8 +72,14 @@ def upload_packing_plan(file_path):
     df.rename(columns=col_map, inplace=True)
 
     conn = db.get_connection()
+    if not conn:
+        print("   > [ERROR] Database connection failed.")
+        return False
+
     cursor = conn.cursor()
-    cursor.execute("TRUNCATE TABLE packing_po")  # Wipe the old day's data!
+    # ---> ENTERPRISE FIX: Added table prefix <---
+    table_name = "pg_auto_tool_table_packing_po"
+    cursor.execute(f"TRUNCATE TABLE {table_name}")
 
     data_to_insert = []
     for _, row in df.iterrows():
@@ -79,7 +94,6 @@ def upload_packing_plan(file_path):
                 if isinstance(d_val, datetime): return d_val
                 return None
 
-            # We still parse it so we get a clean Python datetime object
             start_dt = parse_dt(row.get('Start Date'), row.get('Start Time'))
             end_dt = parse_dt(row.get('End Date'), row.get('End Time'))
 
@@ -91,20 +105,20 @@ def upload_packing_plan(file_path):
                     str(row.get('Material', '')),
                     str(row.get('Description', '')),
                     str(row.get('Batch', '')),
-                    start_dt.date(),  # <-- Extract the Date only
-                    start_dt.time(),  # <-- Extract the Time only
-                    end_dt.date(),  # <-- Extract the Date only
-                    end_dt.time(),  # <-- Extract the Time only
+                    start_dt.date(),
+                    start_dt.time(),
+                    end_dt.date(),
+                    end_dt.time(),
                     float(row.get('Planned Quantity', 0))
                 ))
         except:
             continue
 
     if data_to_insert:
-        # Update the INSERT statement with the 4 new columns!
-        stmt = """INSERT INTO packing_po 
+        # ---> ENTERPRISE FIX: Changed %s to ? for MS SQL compatibility <---
+        stmt = f"""INSERT INTO {table_name} 
                   (line, order_no, p_code, description, batch_no, start_date, start_time, end_date, end_time, planned_qty)
-                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
         cursor.executemany(stmt, data_to_insert)
         conn.commit()
@@ -115,14 +129,11 @@ def upload_packing_plan(file_path):
 
 
 def load_excel_for_date(target_dt: datetime):
-    """Finds the matching Excel file in the input folder based on the chosen calendar date"""
     day = target_dt.day
-    month_str = target_dt.strftime("%b")  # e.g., 'Jan'
-
-    # Regex to match names like "packing_plan_17th Jan.xlsx" or "packing_plan_17 Jan.csv"
+    month_str = target_dt.strftime("%b")
     pattern = re.compile(rf"packing_plan_{day}(?:st|nd|rd|th)?\s+{month_str}.*\.(xlsx|csv)", re.IGNORECASE)
 
-    input_dir = config.INPUT_DIR
+    input_dir = getattr(config, 'INPUT_DIR', os.path.join(base_dir, "data", "input"))
     if not os.path.exists(input_dir):
         return False
 
@@ -130,8 +141,6 @@ def load_excel_for_date(target_dt: datetime):
         if pattern.match(fname):
             file_path = os.path.join(input_dir, fname)
             return upload_packing_plan(file_path)
-
-    print(f"   > WARNING: Could not find an Excel file for {day} {month_str} in {input_dir}")
     return False
 
 
@@ -140,35 +149,28 @@ def load_excel_for_date(target_dt: datetime):
 def run_simulation_api(request: SimulationRequest):
     try:
         print("\n=== API REQUEST RECEIVED: /run ===")
-
         raw_date_str = request.start_date or request.target_date
         if not raw_date_str:
-            return {"status": "error", "message": "No date provided by the frontend."}
+            return {"status": "error", "message": "No date provided."}
 
         target_dt = datetime.fromisoformat(raw_date_str.replace('Z', '+00:00')).replace(tzinfo=None)
         if target_dt.hour == 0 and target_dt.minute == 0:
             target_dt = target_dt.replace(hour=7, minute=30)
 
-        print(f"Target Date: {target_dt.strftime('%Y-%m-%d %H:%M')}")
-
         load_excel_for_date(target_dt)
 
         parsed_downtimes = []
         for dt in request.downtimes:
-            # 1. Safely grab the start time whichever way React sent it
             raw_start = dt.start_datetime or dt.start or dt.startTime
             if not raw_start: continue
-
-            # Convert start time safely (Handles both ISO strings and UI display strings)
             try:
                 start_dt = datetime.fromisoformat(raw_start.replace('Z', '+00:00')).replace(tzinfo=None)
-            except ValueError:
+            except:
                 try:
                     start_dt = datetime.strptime(raw_start, "%d/%m/%Y, %I:%M %p")
                 except:
                     continue
 
-            # 2. Safely calculate the End Time
             raw_end = dt.end_datetime or dt.end
             if raw_end:
                 try:
@@ -176,10 +178,9 @@ def run_simulation_api(request: SimulationRequest):
                 except:
                     continue
             elif dt.duration:
-                # Math: End Time = Start Time + Duration (mins)
                 end_dt = start_dt + timedelta(minutes=int(dt.duration))
             else:
-                continue  # Skip if we have no way to calculate when it ends
+                continue
 
             parsed_downtimes.append({
                 "system": dt.system or "ALL",
@@ -188,31 +189,22 @@ def run_simulation_api(request: SimulationRequest):
                 "reason": dt.reason or "Maintenance"
             })
 
-        print(f"Downtime Blocks Accepted: {len(parsed_downtimes)}")
-        for d in parsed_downtimes:
-            print(f"  - [{d['system']}] {d['start'].strftime('%H:%M')} to {d['end'].strftime('%H:%M')} ({d['reason']})")
-
-        try:
-            update_tank_status(target_dt=target_dt)
-        except Exception as e:
-            print(f"Sensor update warning: {e}")
-
+        update_tank_status(target_dt=target_dt)
         tank_snapshot = get_storage_tank_snapshot(target_dt=target_dt)
 
-        loader = DataLoader("dummy", "dummy")
+        loader = DataLoader()
         master_data = loader.load_master_data()
         bulk_map = loader.load_bulk_variant_map()
-
-        # The loader will now grab the fresh data we just pushed to the DB!
         demands = loader.load_packing_plan(target_date=target_dt)
+
         if not demands:
             return {"status": "error", "message": f"No packing plan found for {target_dt.strftime('%Y-%m-%d')}!"}
 
         wo_matrices = loader.load_washout_matrices()
-
         pst_wo_matrix = {}
         try:
-            query = "SELECT source_gcas, target_gcas, washout_type FROM pst_wo_matrix"
+            # ---> ENTERPRISE FIX: Table Prefix <---
+            query = "SELECT source_gcas, target_gcas, washout_type FROM pg_auto_tool_table_pst_wo_matrix"
             df_pst = pd.read_sql(query, db.get_engine())
             type_map = {"WASH": 20, "RINSE": 20, "NONE": 0}
             for _, row in df_pst.iterrows():
@@ -227,8 +219,7 @@ def run_simulation_api(request: SimulationRequest):
         storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
         mrp_planner = MaterialPlanner(master_data)
 
-        final_batches = []
-        washouts = []
+        final_batches, washouts = [], []
 
         for i in range(3):
             raw_batches = scheduler.run_initial_schedule(demands, target_date=target_dt, downtimes=parsed_downtimes)
@@ -240,19 +231,14 @@ def run_simulation_api(request: SimulationRequest):
                 demands.extend(new_orders)
                 storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
             else:
-                final_batches = cur_batches
-                washouts = cur_washouts
+                final_batches, washouts = cur_batches, cur_washouts
                 break
 
         if final_batches:
             upload_to_sql(final_batches, washouts, downtimes=parsed_downtimes)
-            return {
-                "status": "success",
-                "message": f"Simulation complete! Generated {len(final_batches)} batches.",
-                "total_batches": len(final_batches)
-            }
-        else:
-            return {"status": "warning", "message": "Simulation ran but generated no batches."}
+            return {"status": "success", "message": f"Generated {len(final_batches)} batches."}
+
+        return {"status": "warning", "message": "No batches generated."}
 
     except Exception as e:
         traceback.print_exc()
@@ -262,57 +248,35 @@ def run_simulation_api(request: SimulationRequest):
 @router.post("/upload")
 async def generate_from_latest_upload(payload: list[dict]):
     """
-    Receives JSON from React, saves it as an Excel file,
-    updates the database, and runs the scheduling engine.
+    Receives JSON, saves Excel, updates DB, and runs engine.
     """
-    print("--- STARTING GENERATION FROM UI UPLOAD ---")
-
-    # 1. Setup paths safely for both local and .exe environments
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-    input_dir = os.path.join(base_dir, "data", "input")
-    os.makedirs(input_dir, exist_ok=True)  # Ensure folder exists
+    input_dir = getattr(config, 'INPUT_DIR', os.path.join(base_dir, "data", "input"))
+    os.makedirs(input_dir, exist_ok=True)
     file_path = os.path.join(input_dir, "latest_uploaded_data.xlsx")
 
     try:
-        # 2. Convert React JSON back into the physical Excel file
         df = pd.DataFrame(payload)
         df.to_excel(file_path, index=False)
-        print(f"Saved physical file to: {file_path}")
 
-        # 3. Upload to DB using your existing logic
-        upload_success = upload_packing_plan(file_path)
-        if not upload_success:
-            raise Exception("Failed to upload the data into the database.")
+        if not upload_packing_plan(file_path):
+            raise Exception("Database upload failed.")
 
-        # 4. Initialize Data Loader and fetch the new demands
         data_loader = DataLoader()
         demands = data_loader.load_packing_plan()
-
         if not demands:
-            raise Exception("No valid demands found to schedule.")
+            raise Exception("No valid demands found.")
 
-        # 5. Run the scheduling engine
-        scheduler = Scheduler(demands)
-        schedule_results = scheduler.run_initial_schedule()
+        # Re-running the standard flow logic
+        master_data = data_loader.load_master_data()
+        bulk_map = data_loader.load_bulk_variant_map()
+        enricher = PlanEnricher(master_data, bulk_map)
+        scheduler = Scheduler(enricher)
+        batches = scheduler.run_initial_schedule(demands)
 
-        # 6. Save the final generated plan
-        output_dir = os.path.join(base_dir, "data", "output")
-        os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, "latest_generated_schedule.xlsx")
+        # We assume optimization and export follow standard upload_to_sql logic
+        upload_to_sql(batches, [])
 
-        scheduler.export_to_excel(output_file)
-
-        return {
-            "status": "success",
-            "message": "File saved and Plan successfully generated!",
-            "demands_processed": len(demands),
-            "output_file": output_file
-        }
+        return {"status": "success", "message": "Plan successfully generated!"}
 
     except Exception as e:
-        print(f"Simulation Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

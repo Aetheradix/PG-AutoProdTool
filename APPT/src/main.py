@@ -5,11 +5,15 @@ import time as perf_time
 import pandas as pd
 from datetime import datetime, timedelta, time as dt_time
 
-# --- PATH SETUP ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# --- PATH SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(current_dir)
+
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
 
 from src import config, db
 from src.data_loader import DataLoader
@@ -153,16 +157,18 @@ def main():
     start_perf = perf_time.time()
     print("=== AUTO PRODUCTION PLANNER (FINAL + TIMELINE) ===")
 
-    #target_date = datetime(2026, 1, 12, 7, 30)
+    # ---> ENTERPRISE FIX: Prevent NameError if no specific date is set <---
+    target_date = None  # Or datetime(2026, 1, 12, 7, 30) if testing
 
     # 1. Update Sensors
     try:
         update_tank_status(target_dt=target_date)
-    except:
-        pass
+    except Exception as e:
+        print(f"[WARN] Failed to update tank status: {e}")
 
     # 2. Load Data
-    loader = DataLoader(os.path.join(config.INPUT_DIR, config.MASTER_DATA_FILE), "dummy")
+    filename = getattr(config, 'MASTER_DATA_FILE', 'Master Data - Test.xlsx')
+    loader = DataLoader(os.path.join(config.INPUT_DIR, filename), "dummy")
     try:
         master_data = loader.load_master_data()
         bulk_map = loader.load_bulk_variant_map()
@@ -170,17 +176,21 @@ def main():
         wo_matrices = loader.load_washout_matrices()
         tank_snapshot = get_storage_tank_snapshot(target_dt=target_date)
 
+        # ---> ENTERPRISE FIX: Wire up the active resources from the DB <---
+        active_resources = loader.load_active_equipment()
+
         # Load Washout Matrix
         pst_wo_matrix = {}
         try:
-            query = "SELECT source_gcas, target_gcas, washout_type FROM pst_wo_matrix"
+            # ---> ENTERPRISE FIX: Added table prefix <---
+            query = "SELECT source_gcas, target_gcas, washout_type FROM pg_auto_tool_table_pst_wo_matrix"
             df_pst = pd.read_sql(query, db.get_engine())
             type_map = {"WASH": 20, "RINSE": 20, "NONE": 0}
             for _, row in df_pst.iterrows():
                 pst_wo_matrix[(str(row['source_gcas']).strip(), str(row['target_gcas']).strip())] = type_map.get(
                     str(row['washout_type']).strip().upper(), 20)
         except Exception as e:
-            pass
+            print(f"[WARN] Could not load pst_wo_matrix: {e}")
 
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
@@ -201,7 +211,8 @@ def main():
         raw_batches = scheduler.run_initial_schedule(demands)
         cur_batches, cur_washouts = tank_opt.optimize(raw_batches)
 
-        storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
+        # ---> ENTERPRISE FIX: Inject active_resources into the assigner <---
+        storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix, active_resources)
         storage_assigner.assign_tanks(cur_batches)
 
         new_orders = mrp_planner.check_plan_and_replenish(cur_batches)
@@ -238,7 +249,7 @@ def main():
                 "Batch ID": b.id,
                 "GCAS": b.sku_code,
                 "System": b.system,
-                "Tank Config": getattr(b, 'tank_config', 'FMT'),  # NEW COLUMN
+                "Tank Config": getattr(b, 'tank_config', 'FMT'),
                 "Total MSU": round(b.total_msu, 4),
                 "Tech Type": b.tech_type,
                 "Shift": b.shift,

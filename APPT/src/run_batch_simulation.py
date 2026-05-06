@@ -5,10 +5,15 @@ import time as perf_time
 import pandas as pd
 from datetime import datetime, timedelta, time as dt_time
 
-# Setup Path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path: sys.path.insert(0, project_root)
+# --- PATH SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(current_dir)
+
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
 
 from src import config, db
 from src.data_loader import DataLoader
@@ -18,7 +23,7 @@ from src.update_rm_status import update_tank_status
 from src.storage_manager import get_storage_tank_snapshot
 from src.plan_exporter import upload_to_sql
 
-INPUT_FOLDER = config.INPUT_DIR
+INPUT_FOLDER = getattr(config, 'INPUT_DIR', os.path.join(base_dir, 'data', 'input'))
 YEAR = 2026
 
 TARGET_FILES = [
@@ -51,10 +56,11 @@ def upload_packing_plan(file_path):
     print(f"   > Uploading Demand: {os.path.basename(file_path)}")
     try:
         df = pd.read_excel(file_path)
-    except:
+    except Exception:
         try:
             df = pd.read_csv(file_path, encoding='cp1252')
-        except:
+        except Exception:
+            print(f"   [ERROR] Could not read file: {file_path}")
             return False
 
     col_map = {
@@ -71,8 +77,19 @@ def upload_packing_plan(file_path):
     df.rename(columns=col_map, inplace=True)
 
     conn = db.get_connection()
+    if not conn:
+        print("   [ERROR] Database connection failed during upload.")
+        return False
+
     cursor = conn.cursor()
-    cursor.execute("TRUNCATE TABLE packing_po")
+
+    # ---> ENTERPRISE FIX: Use dynamic config table name <---
+    table_name = getattr(config, 'TABLE_PACKING_PO', 'pg_auto_tool_table_packing_po')
+    try:
+        cursor.execute(f"TRUNCATE TABLE {table_name}")
+    except Exception as e:
+        print(f"   [WARN] Truncate failed, attempting DELETE: {e}")
+        cursor.execute(f"DELETE FROM {table_name}")
 
     data_to_insert = []
     for _, row in df.iterrows():
@@ -82,7 +99,7 @@ def upload_packing_plan(file_path):
                 for fmt in ["%d.%m.%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S"]:
                     try:
                         return datetime.strptime(s, fmt)
-                    except:
+                    except ValueError:
                         pass
                 if isinstance(d_val, datetime): return d_val
                 return None
@@ -98,14 +115,17 @@ def upload_packing_plan(file_path):
                     str(row.get('Batch', '')), start_dt, end_dt,
                     float(row.get('Planned Quantity', 0))
                 ))
-        except:
+        except Exception:
             continue
 
     if data_to_insert:
-        stmt = """INSERT INTO packing_po (line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty)
-                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        # ---> ENTERPRISE FIX: MS SQL placeholders (?) instead of MySQL (%s) <---
+        stmt = f"""INSERT INTO {table_name} 
+                   (line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""
         cursor.executemany(stmt, data_to_insert)
         conn.commit()
+
     cursor.close()
     conn.close()
     return True
@@ -299,7 +319,7 @@ def run_simulation_for_date(file_name, target_date, scheduler, tank_opt, storage
         df_bpr_pdr = generate_bpr_pdr_timeline(final_batches)
 
         out_name = f"Final_Production_Plan_{target_date.strftime('%Y-%m-%d')}.xlsx"
-        out_path = os.path.join(config.OUTPUT_DIR, out_name)
+        out_path = os.path.join(getattr(config, 'OUTPUT_DIR', base_dir), out_name)
 
         with pd.ExcelWriter(out_path, engine='xlsxwriter') as writer:
             df_main.to_excel(writer, sheet_name="Schedule", index=False)
@@ -347,7 +367,7 @@ def main():
         update_tank_status(target_dt=time_zero_date)
         print("   > Ground-Truth Sensors initialized for Jan 10th.")
     except Exception as e:
-        pass
+        print(f"   [WARN] Sensor init failed: {e}")
 
     tank_snapshot = get_storage_tank_snapshot(target_dt=time_zero_date)
     loader = DataLoader("dummy", "dummy")
@@ -355,21 +375,28 @@ def main():
     bulk_map = loader.load_bulk_variant_map()
     wo_matrices = loader.load_washout_matrices()
 
+    # ---> ENTERPRISE FIX: Wire up active resources from DB <---
+    active_resources = loader.load_active_equipment()
+
     pst_wo_matrix = {}
     try:
-        query = "SELECT source_gcas, target_gcas, washout_type FROM pst_wo_matrix"
+        # ---> ENTERPRISE FIX: Table Prefix <---
+        query = "SELECT source_gcas, target_gcas, washout_type FROM pg_auto_tool_table_pst_wo_matrix"
         df_pst = pd.read_sql(query, db.get_engine())
         type_map = {"WASH": 20, "RINSE": 20, "NONE": 0}
         for _, row in df_pst.iterrows():
             pst_wo_matrix[(str(row['source_gcas']).strip(), str(row['target_gcas']).strip())] = type_map.get(
                 str(row['washout_type']).strip().upper(), 20)
-    except:
-        pass
+    except Exception as e:
+        print(f"   [WARN] Could not load pst_wo_matrix: {e}")
 
     enricher = PlanEnricher(master_data, bulk_map)
     scheduler = Scheduler(enricher)
     tank_opt = TankScheduler(wo_matrices)
-    storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix)
+
+    # ---> ENTERPRISE FIX: Inject active_resources <---
+    storage_assigner = StorageAssigner(tank_snapshot, pst_wo_matrix, active_resources)
+
     mrp_planner = MaterialPlanner(master_data)
 
     all_month_batches = []

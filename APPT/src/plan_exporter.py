@@ -19,9 +19,9 @@ def upload_to_sql(batches, washouts, downtimes=None):
     try:
         # --- 1A. MASTER Production Schedule Table ---
         print("Updating table: production_schedule...")
-        cursor.execute("DROP TABLE IF EXISTS production_schedule")
+        cursor.execute("DROP TABLE IF EXISTS pg_auto_tool_table_production_schedule")
         cursor.execute("""
-            CREATE TABLE production_schedule (
+            CREATE TABLE pg_auto_tool_table_production_schedule (
                 batch_id VARCHAR(50) PRIMARY KEY,
                 production_line VARCHAR(50),
                 order_id VARCHAR(50),
@@ -45,9 +45,9 @@ def upload_to_sql(batches, washouts, downtimes=None):
 
         # --- 1B. EDITABLE Sandbox Schedule Table ---
         print("Updating table: production_schedule_editable...")
-        cursor.execute("DROP TABLE IF EXISTS production_schedule_editable")
+        cursor.execute("DROP TABLE IF EXISTS pg_auto_tool_table_production_schedule_editable")
         cursor.execute("""
-            CREATE TABLE production_schedule_editable (
+            CREATE TABLE pg_auto_tool_table_production_schedule_editable (
                 batch_id VARCHAR(50) PRIMARY KEY,
                 production_line VARCHAR(50),
                 order_id VARCHAR(50),
@@ -121,31 +121,32 @@ def upload_to_sql(batches, washouts, downtimes=None):
             ))
 
         if batch_data:
-            # Insert into Master Table
+            # ---> ENTERPRISE FIX: Uses MS SQL '?' placeholders instead of '%s' <---
             stmt_master = """
-                INSERT INTO production_schedule 
+                INSERT INTO pg_auto_tool_table_production_schedule 
                 (batch_id, production_line, order_id, material, description, gcas, system, tank_config, total_msu, tech_type, shift, mkg_start_time, bct_minutes, mkg_end_time, buffer_minutes, storage_tank, pkg_start_time, pkg_end_time) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             cursor.executemany(stmt_master, batch_data)
 
             # Insert identical data into Editable Table
             stmt_editable = """
-                INSERT INTO production_schedule_editable 
+                INSERT INTO pg_auto_tool_table_production_schedule_editable 
                 (batch_id, production_line, order_id, material, description, gcas, system, tank_config, total_msu, tech_type, shift, mkg_start_time, bct_minutes, mkg_end_time, buffer_minutes, storage_tank, pkg_start_time, pkg_end_time) 
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             cursor.executemany(stmt_editable, batch_data)
 
-            print(
-                f"Inserted {len(batch_data)} rows into BOTH 'production_schedule' and 'production_schedule_editable'.")
+            print(f"Inserted {len(batch_data)} rows into BOTH schedule tables.")
 
         # --- 2. UNIVERSAL TIMELINE EVENTS TABLE ---
         print("Updating table: timeline_events...")
-        cursor.execute("DROP TABLE IF EXISTS timeline_events")
+        cursor.execute("DROP TABLE IF EXISTS pg_auto_tool_table_timeline_events")
+
+        # ---> ENTERPRISE FIX: MS SQL uses IDENTITY(1,1) instead of AUTO_INCREMENT <---
         cursor.execute("""
-            CREATE TABLE timeline_events (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+            CREATE TABLE pg_auto_tool_table_timeline_events (
+                id INT IDENTITY(1,1) PRIMARY KEY,
                 resource_name VARCHAR(50),
                 resource_type VARCHAR(50),
                 start_time DATETIME,
@@ -199,18 +200,18 @@ def upload_to_sql(batches, washouts, downtimes=None):
 
         if timeline_data:
             stmt_timeline = """
-                INSERT INTO timeline_events 
+                INSERT INTO pg_auto_tool_table_timeline_events 
                 (resource_name, resource_type, start_time, end_time, description, event_type) 
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?)
             """
             cursor.executemany(stmt_timeline, timeline_data)
             print(f"Inserted {len(timeline_data)} events into 'timeline_events'.")
 
         # --- 3. BPR-PDR AUDIT TABLE ---
         print("Updating table: bpr_pdr...")
-        cursor.execute("DROP TABLE IF EXISTS bpr_pdr")
+        cursor.execute("DROP TABLE IF EXISTS pg_auto_tool_table_bpr_pdr")
         cursor.execute("""
-            CREATE TABLE bpr_pdr (
+            CREATE TABLE pg_auto_tool_table_bpr_pdr (
                 sr_no INT,
                 date VARCHAR(50),
                 batch_no VARCHAR(50) PRIMARY KEY,
@@ -240,9 +241,9 @@ def upload_to_sql(batches, washouts, downtimes=None):
 
         if bpr_data:
             stmt_bpr = """
-                INSERT INTO bpr_pdr 
+                INSERT INTO pg_auto_tool_table_bpr_pdr 
                 (sr_no, date, batch_no, fc_gcas, bulk_description, line, mkg_system, issued_by_1, issued_to_1, p_code)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             cursor.executemany(stmt_bpr, bpr_data)
             print(f"Inserted {len(bpr_data)} records into 'bpr_pdr'.")

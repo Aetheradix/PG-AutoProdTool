@@ -4,25 +4,31 @@ import sys
 import pandas as pd
 from sqlalchemy import text
 
-# Setup Path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# --- PATH SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(current_dir)
+
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
 
 from src import db
 from src import config
 
-
 def fix_master_data_in_sql():
-    # Construct the exact path
-    excel_path = os.path.join(project_root, "data", "input", "Master Data - Test.xlsx")
+    # ---> ENTERPRISE FIX: Use config paths instead of hardcoded strings <---
+    filename = getattr(config, 'MASTER_DATA_FILE', 'Master Data - Test.xlsx')
+    input_dir = getattr(config, 'INPUT_DIR', os.path.join(base_dir, 'data', 'input'))
+    excel_path = os.path.join(input_dir, filename)
 
     print(f"Reading {excel_path}...")
     try:
         df = pd.read_excel(excel_path, sheet_name='Master Data', header=0)
     except Exception as e:
         print(f"Error reading Excel: {e}")
+        print("Please ensure the Master Data file exists in the correct input folder.")
         return
 
     if 'Single/ Dual' not in df.columns or 'GCAS' not in df.columns:
@@ -69,7 +75,8 @@ def fix_master_data_in_sql():
                 if final_tech == 'DUAL': final_tech = 'Dual'
 
             # 3. Execute and track actual SQL changes
-            query = text("UPDATE sku_master SET tech_class = :tech WHERE gcas = :gcas")
+            # ---> ENTERPRISE FIX: Added 'pg_auto_tool_table_' prefix <---
+            query = text("UPDATE pg_auto_tool_table_sku_master SET tech_class = :tech WHERE gcas = :gcas")
             result = conn.execute(query, {"tech": final_tech, "gcas": gcas})
 
             if result.rowcount > 0:
@@ -77,7 +84,6 @@ def fix_master_data_in_sql():
                 print(f"   [SUCCESS] Updated GCAS {gcas} -> {final_tech}")
 
     print(f"\nFINISHED: Successfully modified {total_matched} rows in the database!")
-
 
 if __name__ == "__main__":
     fix_master_data_in_sql()

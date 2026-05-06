@@ -2,7 +2,6 @@ import pandas as pd
 from datetime import datetime
 from src import db
 
-
 def parse_long_date(date_str):
     """
     Parses formats like: 'Thursday, January 22, 2026 8:00:00 AM'
@@ -13,7 +12,7 @@ def parse_long_date(date_str):
     # List of formats to try
     formats = [
         "%A, %B %d, %Y %I:%M:%S %p",  # Thursday, January 22, 2026 8:00:00 AM
-        "%A, %B %d, %Y %H:%M:%S",  # Thursday, January 22, 2026 20:00:00
+        "%A, %B %d, %Y %H:%M:%S",     # Thursday, January 22, 2026 20:00:00
         "%Y-%m-%d %H:%M:%S",
         "%d-%m-%Y %H:%M:%S"
     ]
@@ -25,27 +24,28 @@ def parse_long_date(date_str):
             continue
     return None
 
-
 def get_storage_tank_snapshot(target_dt=None):
     """
     Returns the status of storage tanks using SQLAlchemy and robust date parsing.
     """
     engine = db.get_engine()
-    if not engine: return pd.DataFrame()
+    if not engine:
+        print("[Storage Manager Error] Database engine not initialized.")
+        return pd.DataFrame()
 
     try:
-        # UPDATED: Pull DateAndTime instead of DT#_10_#
-        query_raw = 'SELECT Tagname, GCAS, BATCH_NO, COLOR, DateAndTime FROM tts_raw_data'
+        # ---> ENTERPRISE FIX: Added 'pg_auto_tool_table_' prefix to tts_raw_data <---
+        query_raw = 'SELECT Tagname, GCAS, BATCH_NO, COLOR, DateAndTime FROM pg_auto_tool_table_tts_raw_data'
 
         try:
             df_raw = pd.read_sql(query_raw, engine)
         except Exception:
             # Fallback
-            df_raw = pd.read_sql("SELECT * FROM tts_raw_data", engine)
+            df_raw = pd.read_sql("SELECT * FROM pg_auto_tool_table_tts_raw_data", engine)
 
         if df_raw.empty: return pd.DataFrame()
 
-        # UPDATED: Find DateAndTime dynamically in case of case-sensitivity issues
+        # Find DateAndTime dynamically in case of case-sensitivity issues
         col_name = 'DateAndTime'
         if col_name not in df_raw.columns:
             for c in df_raw.columns:
@@ -65,7 +65,7 @@ def get_storage_tank_snapshot(target_dt=None):
             if mask_na.any():
                 df_raw.loc[mask_na, 'dt_obj'] = pd.to_datetime(df_raw.loc[mask_na, 'status_date'], errors='coerce')
         else:
-            print("[WARN] DateAndTime column not found in tts_raw_data. Using NOW.")
+            print("[WARN] DateAndTime column not found in raw data. Using NOW.")
             df_raw['dt_obj'] = datetime.now()
 
         # FILTER: Time Travel Logic
@@ -89,8 +89,8 @@ def get_storage_tank_snapshot(target_dt=None):
         # Sort Descending and Keep Latest
         df_latest = df_raw.sort_values(by='dt_obj', ascending=False).drop_duplicates(subset=['Tagname'], keep='first')
 
-        # Fetch Color Master
-        df_colors = pd.read_sql("SELECT colour_number, status as status_desc FROM colour_status_master", engine)
+        # ---> ENTERPRISE FIX: Added 'pg_auto_tool_table_' prefix to colour_status_master <---
+        df_colors = pd.read_sql("SELECT colour_number, status as status_desc FROM pg_auto_tool_table_colour_status_master", engine)
 
         # Merge
         df_latest['COLOR'] = df_latest['COLOR'].fillna(0).astype(int)

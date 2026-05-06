@@ -3,42 +3,25 @@ import sys
 import pandas as pd
 from datetime import datetime, timedelta
 
-# --- PATH SETUP ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# --- PATH SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    # Assuming clean.py is in the root directory or a subfolder
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(current_dir)
+
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
 
 from src import config
-import pandas as pd
-from datetime import datetime, timedelta
 
 
-def clean_tts_data(input_path, output_path):
-    print(f"Reading TTS Data from {input_path}...")
-    df = pd.read_csv(input_path)  # or pd.read_excel if loading the raw .xls
-
-    def excel_to_datetime(serial):
-        if pd.isna(serial) or serial == '': return None
-        try:
-            val_float = float(serial)
-            # Excel base date is Dec 30, 1899
-            return (datetime(1899, 12, 30) + timedelta(days=val_float)).strftime('%Y-%m-%d %H:%M:%S')
-        except Exception:
-            return serial  # If it's already a valid date string, leave it alone
-
-    # Apply the fix exclusively to the DateAndTime column
-    df['DateAndTime'] = df['DateAndTime'].apply(excel_to_datetime)
-
-    df.to_csv(output_path, index=False)
-    print(f"Success! Cleaned TTS data saved to: {output_path}")
-
-
-# Example usage:
-# clean_tts_data("data/input/TTS Raw Data.xls - Sheet1.csv", "data/input/TTS_Raw_Data_Cleaned.csv")
-
+# ---------------------------------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------------------------------
 def excel_to_datetime(serial):
-    """Converts Excel serial date (float) to String YYYY-MM-DD HH:MM:SS"""
+    """Converts Excel serial date (float) or existing datetime to String YYYY-MM-DD HH:MM:SS"""
     if pd.isna(serial) or serial == '': return None
     try:
         # Check if it's already a datetime object (from read_excel)
@@ -49,14 +32,15 @@ def excel_to_datetime(serial):
         val_float = float(serial)
         # Excel base date is Dec 30, 1899
         return (datetime(1899, 12, 30) + timedelta(days=val_float)).strftime('%Y-%m-%d %H:%M:%S')
-    except:
+    except Exception:
         return serial  # Return original if parse fails
 
 
 def excel_date_only(serial):
-    """Extracts just the date part"""
+    """Extracts just the date part (YYYY-MM-DD)"""
     dt_str = excel_to_datetime(serial)
-    if dt_str: return dt_str.split(' ')[0]
+    if isinstance(dt_str, str) and ' ' in dt_str:
+        return dt_str.split(' ')[0]
     return dt_str
 
 
@@ -76,21 +60,40 @@ def excel_time_only(serial):
         val_float = val_float % 1
         seconds = round(val_float * 86400)
         return (datetime(1900, 1, 1) + timedelta(seconds=seconds)).strftime('%H:%M:%S')
-    except:
+    except Exception:
         return serial
+
+
+# ---------------------------------------------------------
+# MAIN CLEANING FUNCTIONS
+# ---------------------------------------------------------
+def clean_tts_data(input_path, output_path):
+    print(f"Reading TTS Data from {input_path}...")
+    try:
+        # Read file (auto-detects csv vs excel based on file extension ideally, but defaults to csv here)
+        df = pd.read_csv(input_path)
+
+        # Apply the fix exclusively to the DateAndTime column
+        if 'DateAndTime' in df.columns:
+            df['DateAndTime'] = df['DateAndTime'].apply(excel_to_datetime)
+
+        df.to_csv(output_path, index=False)
+        print(f"Success! Cleaned TTS data saved to: {output_path}")
+    except Exception as e:
+        print(f"Error cleaning TTS data: {e}")
 
 
 def main():
     print("--- CONVERTING INPUT FILE TO CLEAN CSV ---")
 
-    # Corrected Filename
+    # Target File
     filename = "packing_plan_7th Jan.xlsx"
-    input_file = os.path.join(config.INPUT_DIR, filename)
-    output_file = os.path.join(config.INPUT_DIR, "PACKING_PO_DETAIL_Cleaned.csv")
+    input_file = os.path.join(getattr(config, 'INPUT_DIR', 'data/input'), filename)
+    output_file = os.path.join(getattr(config, 'INPUT_DIR', 'data/input'), "PACKING_PO_DETAIL_Cleaned.csv")
 
     if not os.path.exists(input_file):
         print(f"Error: Could not find {input_file}")
-        print(f"Please ensure '{filename}' is inside the 'data/input' folder.")
+        print(f"Please ensure '{filename}' is inside the input folder.")
         return
 
     print(f"Reading {input_file}...")
@@ -110,34 +113,39 @@ def main():
             print(f"CRITICAL ERROR: Could not read file.\nExcel Error: {e_xls}\nCSV Error: {e_csv}")
             return
 
-    # Clean the Data
+    # Clean the Data Safely
     print("Converting Dates and Times...")
 
-    # 1. Start Date (Date Only)
-    df['start_date'] = df['start_date'].apply(excel_date_only)
+    if 'start_date' in df.columns:
+        df['start_date'] = df['start_date'].apply(excel_date_only)
 
-    # 2. End Date (Date Only)
-    df['End_date'] = df['End_date'].apply(excel_date_only)
+    if 'End_date' in df.columns:
+        df['End_date'] = df['End_date'].apply(excel_date_only)
 
-    # 3. Start Time (Time Only)
-    df['start_time'] = df['start_time'].apply(excel_time_only)
+    if 'start_time' in df.columns:
+        df['start_time'] = df['start_time'].apply(excel_time_only)
 
-    # 4. End Time (Time Only)
-    df['End_time'] = df['End_time'].apply(excel_time_only)
+    if 'End_time' in df.columns:
+        df['End_time'] = df['End_time'].apply(excel_time_only)
 
-    # 5. Full Timestamps
     if 'last_update_utc_tmstp' in df.columns:
         df['last_update_utc_tmstp'] = df['last_update_utc_tmstp'].apply(excel_to_datetime)
+
     if 'load_utc_time' in df.columns:
         df['load_utc_time'] = df['load_utc_time'].apply(excel_to_datetime)
 
     # Save to a new, clean CSV
-    df.to_csv(output_file, index=False)
-    print(f"Success! Cleaned data saved to: {output_file}")
+    try:
+        df.to_csv(output_file, index=False)
+        print(f"Success! Cleaned data saved to: {output_file}")
 
-    # Print a preview
-    print("\nPreview:")
-    print(df[['Line', 'order_No', 'start_date', 'start_time', 'End_date', 'End_time']].head())
+        # Print a preview safely
+        preview_cols = [c for c in ['Line', 'order_No', 'start_date', 'start_time', 'End_date', 'End_time'] if
+                        c in df.columns]
+        print("\nPreview:")
+        print(df[preview_cols].head())
+    except Exception as e:
+        print(f"Error saving cleaned file: {e}")
 
 
 if __name__ == "__main__":

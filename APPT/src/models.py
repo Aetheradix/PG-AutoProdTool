@@ -1,9 +1,13 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 @dataclass
 class SKUMeta:
+    """
+    Represents the Master Data for a specific SKU (Finished Good).
+    Contains manufacturing specifications, cycle times, and raw material recipes.
+    """
     gcas: str
     description: str
     technology: str
@@ -14,11 +18,17 @@ class SKUMeta:
 
 @dataclass
 class VariantInfo:
+    """
+    Maps a bulk formulation description to its specific GCAS and container weight.
+    """
     gcas: str
     weight_per_container: float
 
 @dataclass
 class Demand:
+    """
+    Represents a single production order (Packing PO) requested by the business.
+    """
     order_id: str
     material_code: str
     description: str
@@ -29,6 +39,10 @@ class Demand:
 
 @dataclass
 class ProductionBatch:
+    """
+    The core output of the simulation engine. Represents a fully scheduled
+    batch of liquid making, tied to a specific system, tank, and packing line.
+    """
     id: str
     sku_code: str
     system: str
@@ -46,4 +60,4 @@ class ProductionBatch:
     line: str
     tech_type: str
     storage_tank: str = "TBD"
-    mrp_status: str = "OK" # <--- New Field for MRP Alert
+    mrp_status: str = "OK"  # Used by JIT Replenishment to flag material shortages

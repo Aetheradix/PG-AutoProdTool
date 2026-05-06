@@ -3,12 +3,15 @@ import os
 import pandas as pd
 from src import db
 
-# --- PATH SETUP ---
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# --- PATH SETUP (PyInstaller Safe) ---
+if getattr(sys, 'frozen', False):
+    base_dir = os.path.dirname(sys.executable)
+else:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = current_dir if os.path.exists(os.path.join(current_dir, 'src')) else os.path.dirname(current_dir)
 
+if base_dir not in sys.path:
+    sys.path.insert(0, base_dir)
 
 def update_tank_status(target_dt=None):
     print("--- UPDATING RM TANK STATUS (OPTIMIZED) ---")
@@ -23,7 +26,8 @@ def update_tank_status(target_dt=None):
 
         if target_dt:
             # HISTORICAL MODE (Simulation)
-            query = "SELECT * FROM rm_data ORDER BY id DESC LIMIT 500"
+            # ---> ENTERPRISE FIX: MS SQL uses 'TOP 500' instead of 'LIMIT 500', plus table prefix <---
+            query = "SELECT TOP 500 * FROM pg_auto_tool_table_rm_data ORDER BY id DESC"
             df_raw = pd.read_sql(query, engine)
 
             # Normalize Name
@@ -36,19 +40,19 @@ def update_tank_status(target_dt=None):
                     latest_data = df_hist.sort_values(by='dt_obj', ascending=False).iloc[0]
                     print(f"   > Found historical data from: {latest_data['dt_obj']}")
                 else:
-                    print(f"   > [WARN] No history found in recent 500 rows. Using oldest.")
+                    print(f"   > [WARN] No history found before target time. Using oldest.")
                     latest_data = df_raw.iloc[-1]
             else:
                 latest_data = df_raw.iloc[0]
 
         else:
             # LIVE MODE (Standard)
-            # Use Pandas via the engine directly instead of a raw cursor
-            df_max = pd.read_sql("SELECT MAX(id) as max_id FROM rm_data", engine)
+            # ---> ENTERPRISE FIX: Table Prefix <---
+            df_max = pd.read_sql("SELECT MAX(id) as max_id FROM pg_auto_tool_table_rm_data", engine)
             max_id = df_max['max_id'].iloc[0] if not df_max.empty else None
 
             if max_id:
-                query = f"SELECT * FROM rm_data WHERE id = {max_id}"
+                query = f"SELECT * FROM pg_auto_tool_table_rm_data WHERE id = {max_id}"
                 df_raw = pd.read_sql(query, engine)
                 latest_data = df_raw.iloc[0]
             else:
@@ -56,7 +60,8 @@ def update_tank_status(target_dt=None):
                 return
 
         # Fetch config using the engine
-        df_config = pd.read_sql("SELECT tank_name, deadstock_value FROM rm_status_data", engine)
+        # ---> ENTERPRISE FIX: Table Prefix <---
+        df_config = pd.read_sql("SELECT tank_name, deadstock_value FROM pg_auto_tool_table_rm_status_data", engine)
         updates = []
 
         for _, row in df_config.iterrows():
@@ -74,7 +79,8 @@ def update_tank_status(target_dt=None):
             conn = db.get_connection()
             if conn:
                 cursor = conn.cursor()
-                stmt = "UPDATE rm_status_data SET current_value = %s, status = %s WHERE tank_name = %s"
+                # ---> ENTERPRISE FIX: '?' placeholders instead of '%s', plus Table Prefix <---
+                stmt = "UPDATE pg_auto_tool_table_rm_status_data SET current_value = ?, status = ? WHERE tank_name = ?"
                 cursor.executemany(stmt, updates)
                 conn.commit()
                 print(f"   > Successfully updated {len(updates)} tanks.")
@@ -83,7 +89,6 @@ def update_tank_status(target_dt=None):
 
     except Exception as e:
         print(f"   > [Error] Failed to update RM status: {e}")
-
 
 if __name__ == "__main__":
     update_tank_status()
