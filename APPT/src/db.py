@@ -5,7 +5,7 @@ import urllib.parse
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
-# Path setup to find .env safely whether run locally or as an compiled .exe
+# Path setup to find .env safely whether run locally or as a compiled .exe
 if getattr(sys, 'frozen', False):
     base_dir = os.path.dirname(sys.executable)
 else:
@@ -30,6 +30,13 @@ def get_engine():
             database = os.getenv("DB_NAME")
             username = os.getenv("DB_USER")
             password = os.getenv("DB_PASSWORD")
+
+            # --- ENTERPRISE SHIELD: Prevent URL Parsing Crashes ---
+            if not all([server, database, username, password]):
+                print("CRITICAL: Missing database credentials.")
+                print(f" -> Ensure the '.env' file is located exactly at: {base_dir}")
+                print(f" -> Found - Server: {bool(server)}, DB: {bool(database)}, User: {bool(username)}, Pass: {bool(password)}")
+                return None
 
             # URL-encode the password to safely handle special characters (like @, #)
             encoded_password = urllib.parse.quote_plus(password)
