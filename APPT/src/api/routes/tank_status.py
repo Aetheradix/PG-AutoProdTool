@@ -86,6 +86,7 @@ async def get_tank_status(
         }
 
     except Exception as e:
+        print(f"[TANK-STATUS] EXCEPTION: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching tank status: {str(e)}"

@@ -21,19 +21,24 @@ async def get_recent_data(
     try:
         engine = get_engine()
         if not engine:
+            print("[RECENT-DATA] ERROR: DB engine is None!")
             raise HTTPException(status_code=500, detail="Database connection failed.")
 
         # ---> ENTERPRISE FIX: MS SQL uses 'TOP' instead of 'LIMIT' and needs table prefix <---
+        print(f"[RECENT-DATA] Engine OK – running query with limit={limit}")
         query = text("SELECT TOP (:limit) * FROM pg_auto_tool_table_tts_raw_data ORDER BY ID DESC")
 
         df = pd.read_sql(query, engine, params={"limit": limit})
+        print(f"[RECENT-DATA] Query returned {len(df)} rows")
 
         # --- ENTERPRISE CLEANING ---
         # Replace NaN / Inf with None so the API returns valid JSON nulls
         df = df.replace({np.nan: None, np.inf: None, -np.inf: None})
 
         mapped_data = df.to_dict(orient="records")
+        print(f"[RECENT-DATA] Returning {len(mapped_data)} records")
 
+        print("[RM-DATA] Returning RM data response")
         return {
             "status": "success",
             "message": "Data retrieved successfully",
@@ -43,6 +48,7 @@ async def get_recent_data(
     except HTTPException:
         raise
     except Exception as e:
+        print(f"[RECENT-DATA] EXCEPTION: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching recent data: {str(e)}"

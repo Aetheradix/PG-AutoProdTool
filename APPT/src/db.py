@@ -26,16 +26,17 @@ def get_engine():
     # Only build the engine if it doesn't exist yet
     if _ENGINE is None:
         try:
-            server = os.getenv("DB_SERVER")
+            # Try DB_HOST first, fallback to DB_SERVER for legacy config
+            server = os.getenv("DB_HOST") or os.getenv("DB_SERVER")
             database = os.getenv("DB_NAME")
             username = os.getenv("DB_USER")
             password = os.getenv("DB_PASSWORD")
 
             # --- ENTERPRISE SHIELD: Prevent URL Parsing Crashes ---
+            print(f"[DB] Attempting connection: server={server}, db={database}, user={username}")
             if not all([server, database, username, password]):
-                print("CRITICAL: Missing database credentials.")
-                print(f" -> Ensure the '.env' file is located exactly at: {base_dir}")
-                print(f" -> Found - Server: {bool(server)}, DB: {bool(database)}, User: {bool(username)}, Pass: {bool(password)}")
+                print("[DB] ERROR: Missing database credentials.")
+                print(f"[DB] Found -> Server: {bool(server)}, DB: {bool(database)}, User: {bool(username)}, Pass: {bool(password)}")
                 return None
 
             # URL-encode the password to safely handle special characters (like @, #)

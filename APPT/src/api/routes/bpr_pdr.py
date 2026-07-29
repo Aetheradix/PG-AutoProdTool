@@ -74,6 +74,7 @@ async def get_bpr_pdr(
             }
         }
     except Exception as e:
+        print(f"[BPR-PDR] EXCEPTION: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching BPR-PDR data: {str(e)}"

@@ -27,8 +27,10 @@ async def get_rm_data():
             raise HTTPException(status_code=500, detail="Database connection failed.")
 
         # ---> ENTERPRISE FIX: Added table prefix <---
+        print("[RM-DATA] Executing RM status query")
         query = text("SELECT * FROM pg_auto_tool_table_rm_status_data")
         df = pd.read_sql(query, engine)
+        print(f"[RM-DATA] Retrieved {len(df)} rows")
 
         # ---> ENTERPRISE FIX: Added table prefix <---
         time_query = text("SELECT MAX(DateandTime) FROM pg_auto_tool_table_rm_data")

@@ -69,10 +69,8 @@ async def get_bulk_details(
             }
         }
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error fetching bulk details data: {str(e)}"
-        )
+        print(f"[BULK-DETAILS] EXCEPTION: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching bulk details data: {str(e)}")
 
 
 class BulkDetailsCreate(BulkDetailsUpdate):
