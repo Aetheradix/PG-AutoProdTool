@@ -87,15 +87,16 @@ def upload_packing_plan(file_path):
                 data_to_insert.append((
                     str(row.get('Production Line', '')), str(row.get('Order', '')),
                     str(row.get('Material', '')), str(row.get('Description', '')),
-                    str(row.get('Batch', '')), start_dt, end_dt,
-                    float(row.get('Planned Quantity', 0))
+                    str(row.get('Batch', '')), float(row.get('Planned Quantity', 0)),
+                    start_dt.date(), start_dt.time(),
+                    end_dt.date(), end_dt.time()
                 ))
         except:
             continue
 
     if data_to_insert:
-        stmt = """INSERT INTO packing_po (line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty)
-                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        stmt = """INSERT INTO packing_po (line, order_no, p_code, description, batch_no, planned_qty, start_date, start_time, end_date, end_time)
+                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
         cursor.executemany(stmt, data_to_insert)
         conn.commit()
     cursor.close()

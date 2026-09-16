@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, HTTPException, Depends
+﻿from fastapi import APIRouter, Query, HTTPException, Depends
 from src.db import get_engine
 from src.auth import any_user, admin_required
 from sqlalchemy import text
@@ -146,6 +146,41 @@ async def get_timeline_data(limit: int = Query(default=100, ge=1, le=1000)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+@router.get("/washout-matrix", dependencies=[Depends(any_user)])
+async def get_washout_matrix():
+    """
+    Returns washout matrix data from all four matrix tables:
+    - FMT (fmt_wo_matrix)
+    - MMT 6T (mmt_6t_matrix)
+    - MMT 12T (mmt_12t_matrix)
+    - PST (pst_wo_matrix)
+    Each matrix is returned as list of {source_gcas, target_gcas, washout_type} rows.
+    """
+    try:
+        engine = get_engine()
+        tables = {
+            "FMT": "fmt_wo_matrix",
+            "MMT_6T": "mmt_6t_matrix",
+            "MMT_12T": "mmt_12t_matrix",
+            "PST": "pst_wo_matrix",
+        }
+
+        result = {}
+        for key, table_name in tables.items():
+            try:
+                query = text(f"SELECT * FROM `{table_name}`")
+                df = pd.read_sql(query, engine)
+                df = df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(pd.notnull(df), None)
+                df.columns = [c.lower() for c in df.columns]
+                result[key] = df.to_dict(orient="records")
+            except Exception:
+                result[key] = []
+
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.put("/timeline-data/{event_id}", dependencies=[Depends(admin_required)])
 async def update_timeline_data(event_id: int, payload: dict):
     """
@@ -169,3 +204,4 @@ async def update_timeline_data(event_id: int, payload: dict):
         return {"success": True, "message": f"Event {event_id} updated successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+

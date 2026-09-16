@@ -119,14 +119,15 @@ class DataLoader:
         print("Loading Packing Plan from SQL (packing_po)...")
         demands = []
         try:
-            # 1. Add the Target Date Filter to the SQL Query
-            query = "SELECT line, order_no, p_code, description, batch_no, start_datetime, end_datetime, planned_qty FROM packing_po"
+            # 1. Add the Target Date Filter to the SQL Query (handles start_date + start_time)
+            query = """SELECT line, order_no, p_code, description, batch_no, 
+                              IFNULL(CONCAT(start_date, ' ', start_time), start_date) AS start_datetime, 
+                              IFNULL(CONCAT(end_date, ' ', end_time), end_date) AS end_datetime, 
+                              planned_qty FROM packing_po"""
 
             if target_date:
-                # Format the Python datetime into a SQL-friendly string (YYYY-MM-DD)
                 date_str = target_date.strftime('%Y-%m-%d')
-                # Filter so we only grab orders that fall on the chosen day
-                query += f" WHERE DATE(start_datetime) = '{date_str}'"
+                query += f" WHERE start_date = '{date_str}'"
                 print(f"   > Filtering orders for date: {date_str}")
 
             df = pd.read_sql(query, db.get_engine())

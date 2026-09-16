@@ -28,9 +28,9 @@ def get_engine():
             port = os.getenv("DB_PORT", "3306")
             database = os.getenv("DB_NAME")
 
-            # Using mysql-connector-python
-            url = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}"
-
+            # Using mssql-connector-python
+            # url = f"mssql+pyodbc://{username}:{encoded_password}@{server}/{database}?driver=ODBC+Driver+17+for+SQL+Server"
+            url = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
             # Connection Pooling: Keep 5 connections open, recycle them every 30 mins
             _ENGINE = create_engine(
                 url,

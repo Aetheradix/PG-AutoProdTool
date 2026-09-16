@@ -103,6 +103,71 @@ async def get_gantt_chart_data():
 
 
 
+
+class GanttEditUpdate(BaseModel):
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+
+
+@router.get("/gantt-edit", dependencies=[Depends(any_user)])
+async def get_gantt_edit_data():
+    """
+    Returns production schedule data as a flat list for gantt edit / fallback.
+    """
+    try:
+        engine = get_engine()
+        query = text("SELECT * FROM production_schedule")
+        df = pd.read_sql(query, engine)
+        df = df.replace({np.nan: None, np.inf: None, -np.inf: None}).where(pd.notnull(df), None)
+        return {
+            "status": "success",
+            "message": "Gantt edit data retrieved successfully",
+            "data": df.to_dict(orient="records")
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching gantt edit data: {str(e)}"
+        )
+
+
+@router.put("/gantt-edit/{batch_id}", dependencies=[Depends(any_user)])
+async def update_gantt_edit(batch_id: str, update_data: GanttEditUpdate):
+    """
+    Updates start and end times for a batch in production_schedule from draggable Gantt chart.
+    """
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            check_query = text("SELECT batch_id FROM production_schedule WHERE batch_id = :batch_id")
+            result = conn.execute(check_query, {"batch_id": batch_id}).fetchone()
+            if not result:
+                raise HTTPException(status_code=404, detail=f"Record with batch_id {batch_id} not found")
+            
+            update_query = text("""
+                UPDATE production_schedule 
+                SET mkg_start_time = :start_time, mkg_end_time = :end_time
+                WHERE batch_id = :batch_id
+            """)
+            conn.execute(update_query, {
+                "batch_id": batch_id,
+                "start_time": update_data.start_time,
+                "end_time": update_data.end_time
+            })
+            conn.commit()
+        return {
+            "status": "success",
+            "message": f"Batch {batch_id} timing updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error updating gantt edit: {str(e)}"
+        )
+
+
 # --------------------------------Table View-----------------------------------
 @router.get("")
 async def get_production_schedule(
