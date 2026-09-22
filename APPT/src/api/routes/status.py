@@ -197,8 +197,15 @@ async def update_timeline_data(event_id: int, payload: dict):
         query = text(
             "UPDATE timeline_data SET start_time = :start_time, end_time = :end_time WHERE id = :id"
         )
+        query_events = text(
+            "UPDATE timeline_events SET start_time = :start_time, end_time = :end_time WHERE id = :id"
+        )
         with engine.connect() as conn:
             conn.execute(query, {"start_time": start_time, "end_time": end_time, "id": event_id})
+            try:
+                conn.execute(query_events, {"start_time": start_time, "end_time": end_time, "id": event_id})
+            except Exception as ev_err:
+                print(f"Warning updating timeline_events: {ev_err}")
             conn.commit()
 
         return {"success": True, "message": f"Event {event_id} updated successfully"}

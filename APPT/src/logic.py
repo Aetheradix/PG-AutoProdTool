@@ -27,16 +27,89 @@ class PlanEnricher:
             t = re.sub(pattern, '', t)
         return re.sub(r'[^A-Z0-9]', '', t)
 
+    def _extract_case_weight(self, desc: str) -> float:
+        import re
+        m = re.search(r'([\d.]+)\s*ML\s*X\s*(\d+)', desc, re.IGNORECASE)
+        if m:
+            ml = float(m.group(1))
+            qty = float(m.group(2))
+            return round((ml * qty) / 1000.0, 3)
+        return 8.0
+
     def find_variant_for_demand(self, demand: Demand) -> Optional[VariantInfo]:
+        import re
         if demand.material_code in [config.GCAS_HC_BASE, config.GCAS_CLIMBAZOLE]:
             return None
 
+        # 1. Direct description match
         if demand.description in self.bulk_map:
             return self.bulk_map[demand.description]
 
+        # 2. Direct p_code match
+        pcode_key = f'__pcode__{demand.material_code.strip()}'
+        if demand.material_code and pcode_key in self.bulk_map:
+            return self.bulk_map[pcode_key]
+
+        # 3. Normalized description match
         clean_desc = self._normalize_text(demand.description)
         if clean_desc in self.clean_bulk_map:
             return self.clean_bulk_map[clean_desc]
+
+        # 4. Smart keyword & variant resolution for Excel uploads
+        d_upper = demand.description.upper()
+        case_weight = self._extract_case_weight(demand.description)
+
+        # Conditioners
+        if re.search(r'COND|CONDITIONER|3MM', d_upper):
+            if re.search(r'\bSS\b|SILKY|SMOOTH', d_upper):
+                return VariantInfo(gcas='21090112', weight_per_container=case_weight)
+            return VariantInfo(gcas='21090111', weight_per_container=case_weight)
+
+        # Pantene Shampoos
+        if re.search(r'PNTN|PTN|PANTENE', d_upper):
+            if re.search(r'\bLC\b|LIVELY\s*CLEAN', d_upper):
+                return VariantInfo(gcas='20256318', weight_per_container=case_weight)
+            if re.search(r'\bSS\b|SSC|SILKY|SMOOTH', d_upper):
+                return VariantInfo(gcas='21302240', weight_per_container=case_weight)
+            if re.search(r'\bHFC\b|HAIR\s*FALL|DEEP\s*REPAIR', d_upper):
+                return VariantInfo(gcas='21302239', weight_per_container=case_weight)
+            return VariantInfo(gcas='21302239', weight_per_container=case_weight)
+
+        # Head & Shoulders
+        if re.search(r'H&S|HEAD|SHOULDER|\bHS\b', d_upper):
+            if re.search(r'DAILY\s*CLEAN', d_upper):
+                return VariantInfo(gcas='21470269', weight_per_container=case_weight)
+            if re.search(r'DAILY\s*COOL', d_upper):
+                return VariantInfo(gcas='21453170', weight_per_container=case_weight)
+            if re.search(r'DAILY\s*SMOOTH|\bDS\b', d_upper):
+                return VariantInfo(gcas='21470270', weight_per_container=case_weight)
+            if re.search(r'NEEM', d_upper):
+                return VariantInfo(gcas='21448509', weight_per_container=case_weight)
+            if re.search(r'CHARCOAL|DEEP\s*CLEAN', d_upper):
+                return VariantInfo(gcas='21433484', weight_per_container=case_weight)
+            if re.search(r'SS\s*2IN1|SS\s*2-IN-1|SUAVE\s*2IN1|2IN1\s*SUAVE|SUAVE', d_upper):
+                return VariantInfo(gcas='21432817', weight_per_container=case_weight)
+            if re.search(r'AHF\s*2IN1|AHF\s*2-IN-1', d_upper):
+                return VariantInfo(gcas='21412529', weight_per_container=case_weight)
+            if re.search(r'CM\s*2IN1|CM\s*2-IN-1', d_upper):
+                return VariantInfo(gcas='21422088', weight_per_container=case_weight)
+            if re.search(r'\bAHF\b|ANTI\s*HAIR', d_upper):
+                return VariantInfo(gcas='21417344', weight_per_container=case_weight)
+            if re.search(r'\bCM\b|COOL\s*MENTHOL', d_upper):
+                return VariantInfo(gcas='90947730', weight_per_container=case_weight)
+            if re.search(r'\bMF\b|MENTHOL\s*FRESH', d_upper):
+                return VariantInfo(gcas='90275009', weight_per_container=case_weight)
+            if re.search(r'\bSB\b|SHINY\s*BLACK', d_upper):
+                return VariantInfo(gcas='21422081', weight_per_container=case_weight)
+            if re.search(r'7IN1|7-IN-1', d_upper):
+                return VariantInfo(gcas='21433480', weight_per_container=case_weight)
+            if re.search(r'\bSS\b|S&S|SMOOTH|SILKY', d_upper):
+                return VariantInfo(gcas='21422079', weight_per_container=case_weight)
+            return VariantInfo(gcas='21470269', weight_per_container=case_weight)
+
+        # Washout / Clean placeholder rows
+        if re.search(r'CLEAN|WASH', d_upper):
+            return VariantInfo(gcas='21470269', weight_per_container=case_weight)
 
         return None
 
@@ -141,7 +214,21 @@ class Scheduler:
         if downtimes is None: downtimes = []
         print(f"--- Calculating Initial Schedule ({len(demands)} raw demands) ---")
 
-        anchor_date = target_date if target_date else demands[0].pkg_start_dt
+        valid_dates = [d.pkg_start_dt for d in demands if d.pkg_start_dt is not None and not pd.isna(d.pkg_start_dt)]
+        if target_date:
+            anchor_date = target_date
+        elif valid_dates:
+            anchor_date = valid_dates[0]
+        else:
+            anchor_date = datetime.now()
+
+        # Sanitize demand dates
+        for d in demands:
+            if d.pkg_start_dt is None or pd.isna(d.pkg_start_dt):
+                d.pkg_start_dt = anchor_date
+            if d.pkg_end_dt is None or pd.isna(d.pkg_end_dt):
+                d.pkg_end_dt = d.pkg_start_dt + timedelta(hours=2)
+
         date_str = anchor_date.strftime("%m%d")
 
         enriched_demands = []

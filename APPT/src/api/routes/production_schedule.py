@@ -144,16 +144,26 @@ async def update_gantt_edit(batch_id: str, update_data: GanttEditUpdate):
             if not result:
                 raise HTTPException(status_code=404, detail=f"Record with batch_id {batch_id} not found")
             
+            params = {
+                "batch_id": batch_id,
+                "start_time": update_data.start_time,
+                "end_time": update_data.end_time
+            }
             update_query = text("""
                 UPDATE production_schedule 
                 SET mkg_start_time = :start_time, mkg_end_time = :end_time
                 WHERE batch_id = :batch_id
             """)
-            conn.execute(update_query, {
-                "batch_id": batch_id,
-                "start_time": update_data.start_time,
-                "end_time": update_data.end_time
-            })
+            conn.execute(update_query, params)
+            try:
+                update_query_ed = text("""
+                    UPDATE production_schedule_editable 
+                    SET mkg_start_time = :start_time, mkg_end_time = :end_time
+                    WHERE batch_id = :batch_id
+                """)
+                conn.execute(update_query_ed, params)
+            except Exception as ed_err:
+                print(f"Warning updating production_schedule_editable: {ed_err}")
             conn.commit()
         return {
             "status": "success",
@@ -240,8 +250,12 @@ async def create_production_schedule(data: ProductionScheduleCreate):
             placeholders = ", ".join([f":{k}" for k in fields.keys()])
             
             insert_query = text(f"INSERT INTO production_schedule ({columns}) VALUES ({placeholders})")
-            
             conn.execute(insert_query, fields)
+            try:
+                insert_query_ed = text(f"INSERT INTO production_schedule_editable ({columns}) VALUES ({placeholders})")
+                conn.execute(insert_query_ed, fields)
+            except Exception as ed_err:
+                print(f"Warning inserting into production_schedule_editable: {ed_err}")
             conn.commit()
 
         return {
@@ -285,6 +299,11 @@ async def update_production_schedule(batch_id: str, update_data: ProductionSched
             params["batch_id_id"] = batch_id
             
             conn.execute(text(update_query_str), params)
+            try:
+                update_query_str_ed = f"UPDATE production_schedule_editable SET {', '.join(update_parts)} WHERE batch_id = :batch_id_id"
+                conn.execute(text(update_query_str_ed), params)
+            except Exception as ed_err:
+                print(f"Warning updating production_schedule_editable: {ed_err}")
             conn.commit()
 
         return {
@@ -319,6 +338,11 @@ async def delete_production_schedule(batch_id: str):
             # Delete query
             delete_query = text("DELETE FROM production_schedule WHERE batch_id = :batch_id")
             conn.execute(delete_query, {"batch_id": batch_id})
+            try:
+                delete_query_ed = text("DELETE FROM production_schedule_editable WHERE batch_id = :batch_id")
+                conn.execute(delete_query_ed, {"batch_id": batch_id})
+            except Exception as ed_err:
+                print(f"Warning deleting from production_schedule_editable: {ed_err}")
             conn.commit()
 
         return {

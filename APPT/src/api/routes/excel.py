@@ -38,6 +38,14 @@ def parse_time(val):
     s = str(val).strip()
     if not s or s.lower() == "nan":
         return None
+    # Handle ISO Duration format: PT9H10M, PT16H6M30S etc.
+    import re as _re
+    iso_match = _re.match(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$", s, _re.IGNORECASE)
+    if iso_match:
+        h = int(iso_match.group(1) or 0)
+        m = int(iso_match.group(2) or 0)
+        sec = int(iso_match.group(3) or 0)
+        return f"{h:02d}:{m:02d}:{sec:02d}"
     if ":" in s:
         parts = s.split(":")
         try:

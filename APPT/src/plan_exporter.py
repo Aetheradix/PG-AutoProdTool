@@ -18,10 +18,10 @@ def upload_to_sql(batches, washouts, downtimes=None):
 
     try:
         # --- 1. Production Schedule Table ---
-        print("Updating table: production_schedule...")
+        print("Updating tables: production_schedule and production_schedule_editable...")
         cursor.execute("DROP TABLE IF EXISTS production_schedule")
-        cursor.execute("""
-            CREATE TABLE production_schedule (
+        cursor.execute("DROP TABLE IF EXISTS production_schedule_editable")
+        ps_schema = """(
                 batch_id VARCHAR(50) PRIMARY KEY,
                 production_line VARCHAR(50),
                 order_id VARCHAR(50),
@@ -40,8 +40,9 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 storage_tank VARCHAR(100),
                 pkg_start_time DATETIME,
                 pkg_end_time DATETIME
-            )
-        """)
+            )"""
+        cursor.execute(f"CREATE TABLE production_schedule {ps_schema}")
+        cursor.execute(f"CREATE TABLE production_schedule_editable {ps_schema}")
 
         batch_data = []
 
@@ -104,13 +105,19 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             cursor.executemany(stmt_batch, batch_data)
-            print(f"Inserted {len(batch_data)} rows (Batches + Downtimes) into 'production_schedule'.")
+            stmt_batch_editable = """
+                INSERT INTO production_schedule_editable 
+                (batch_id, production_line, order_id, material, description, gcas, system, tank_config, total_msu, tech_type, shift, mkg_start_time, bct_minutes, mkg_end_time, buffer_minutes, storage_tank, pkg_start_time, pkg_end_time) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            cursor.executemany(stmt_batch_editable, batch_data)
+            print(f"Inserted {len(batch_data)} rows into 'production_schedule' and 'production_schedule_editable'.")
 
-        # --- 2. UNIVERSAL TIMELINE EVENTS TABLE ---
-        print("Updating table: timeline_events...")
+        # --- 2. UNIVERSAL TIMELINE EVENTS & TIMELINE DATA TABLES ---
+        print("Updating tables: timeline_events and timeline_data...")
         cursor.execute("DROP TABLE IF EXISTS timeline_events")
-        cursor.execute("""
-            CREATE TABLE timeline_events (
+        cursor.execute("DROP TABLE IF EXISTS timeline_data")
+        tl_schema = """(
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 resource_name VARCHAR(50),
                 resource_type VARCHAR(50),
@@ -118,8 +125,9 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 end_time DATETIME,
                 description VARCHAR(255),
                 event_type VARCHAR(50)
-            )
-        """)
+            )"""
+        cursor.execute(f"CREATE TABLE timeline_events {tl_schema}")
+        cursor.execute(f"CREATE TABLE timeline_data {tl_schema}")
 
         timeline_data = []
 
@@ -170,7 +178,13 @@ def upload_to_sql(batches, washouts, downtimes=None):
                 VALUES (%s, %s, %s, %s, %s, %s)
             """
             cursor.executemany(stmt_timeline, timeline_data)
-            print(f"Inserted {len(timeline_data)} events into 'timeline_events'.")
+            stmt_timeline_data = """
+                INSERT INTO timeline_data 
+                (resource_name, resource_type, start_time, end_time, description, event_type) 
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            cursor.executemany(stmt_timeline_data, timeline_data)
+            print(f"Inserted {len(timeline_data)} events into 'timeline_events' and 'timeline_data'.")
 
         # --- 3. BPR-PDR AUDIT TABLE ---
         print("Updating table: bpr_pdr...")

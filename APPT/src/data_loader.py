@@ -45,8 +45,13 @@ class DataLoader:
             desc = str(row.get('description', '')).strip()
             gcas = self._clean_gcas(row.get('bulk_gcas', ''))
             weight = float(row.get('weight_per_container_kg', 0.0))
-            if desc and gcas:
-                variant_map[desc] = VariantInfo(gcas=gcas, weight_per_container=weight)
+            p_code = str(row.get('p_code', '')).strip()
+            if gcas and gcas.lower() != 'nan':
+                if desc and desc.lower() != 'nan':
+                    variant_map[desc] = VariantInfo(gcas=gcas, weight_per_container=weight)
+                # ALSO index by p_code so we can match by material_code directly
+                if p_code and p_code.lower() != 'nan':
+                    variant_map[f'__pcode__{p_code}'] = VariantInfo(gcas=gcas, weight_per_container=weight)
         return variant_map
 
     def load_master_data(self) -> Dict[str, SKUMeta]:
@@ -125,14 +130,15 @@ class DataLoader:
                               IFNULL(CONCAT(end_date, ' ', end_time), end_date) AS end_datetime, 
                               planned_qty FROM packing_po"""
 
+            # FIX: Load ALL rows from packing_po (no date filter).
+            # Excel upload TRUNCATEs the table so date filtering causes mismatches.
             if target_date:
                 date_str = target_date.strftime('%Y-%m-%d')
-                query += f" WHERE start_date = '{date_str}'"
-                print(f"   > Filtering orders for date: {date_str}")
+                print(f"   > Target date: {date_str}. Loading all packing_po rows (no date filter).")
+            df = pd.read_sql(query + " WHERE planned_qty > 0 OR planned_qty IS NOT NULL", db.get_engine())
 
-            df = pd.read_sql(query, db.get_engine())
             if df.empty:
-                print("   > No demands found in DB for this date.")
+                print("   > No demands found in DB.")
                 return []
 
             for _, row in df.iterrows():

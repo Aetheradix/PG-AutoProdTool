@@ -141,8 +141,22 @@ def run_simulation_api(request: SimulationRequest):
 
         print(f"Target Date: {target_dt.strftime('%Y-%m-%d %H:%M')}")
 
-        # --- NEW STEP: UPLOAD THE EXCEL FILE TO SQL FIRST! ---
-        load_excel_for_date(target_dt)
+        # FIX: Check TOTAL count (not date-specific) so uploaded data is always used
+        # If data was already uploaded via web Excel upload, do NOT overwrite with old disk files
+        try:
+            from sqlalchemy import text as _text
+            _engine = db.get_engine()
+            _date_str = target_dt.strftime('%Y-%m-%d')
+            with _engine.connect() as _conn:
+                _total_count = _conn.execute(_text("SELECT COUNT(*) FROM packing_po")).scalar()
+            if _total_count == 0:
+                print(f"   > packing_po is empty. Loading from disk Excel for {_date_str}...")
+                load_excel_for_date(target_dt)
+            else:
+                print(f"   > Using existing packing_po data ({_total_count} total rows). Skipping disk load.")
+        except Exception as _ex:
+            print(f"   > Warning checking packing_po: {_ex}. Attempting disk load as fallback.")
+            load_excel_for_date(target_dt)
 
         parsed_downtimes = []
         for dt in request.downtimes:
