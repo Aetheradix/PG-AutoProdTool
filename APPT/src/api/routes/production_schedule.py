@@ -54,11 +54,12 @@ async def get_gantt_chart_data():
         grouped_data = {
             "6T": {},
             "12T": {},
+            "1.25T": {},
             "Tanks": []
         }
 
         if not ps_df.empty:
-            for system in ["6T", "12T"]:
+            for system in ["6T", "12T", "1.25T"]:
                 system_df = ps_df[ps_df['system'] == system]
                 system_dict = {}
                 if not system_df.empty:
@@ -69,7 +70,7 @@ async def get_gantt_chart_data():
             # Include ALL_SYSTEMS downtime rows as a flat list so frontend can inject them
             all_systems_df = ps_df[
                 ps_df['description'].str.upper().str.startswith('DOWNTIME', na=False) &
-                ~ps_df['system'].isin(['6T', '12T'])
+                ~ps_df['system'].isin(['6T', '12T', '1.25T'])
             ]
             if not all_systems_df.empty:
                 grouped_data['ALL_SYSTEMS'] = all_systems_df.to_dict(orient="records")
