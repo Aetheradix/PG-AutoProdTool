@@ -21,10 +21,11 @@ router = APIRouter()
 
 # --- 1. VALIDATION MODELS ---
 class DowntimeBlock(BaseModel):
-    id: Optional[Any] = None         # <-- NEW: Catch the React ID!
-    system: Optional[str] = "ALL"
+    id: Optional[Any] = None
+    system: Optional[str] = None
+    line: Optional[str] = None
     startTime: Optional[str] = None
-    duration: Optional[int] = None   # <-- FIX: Accept an integer!
+    duration: Optional[int] = None
     start_datetime: Optional[str] = None
     end_datetime: Optional[str] = None
     start: Optional[str] = None
@@ -164,9 +165,17 @@ def run_simulation_api(request: SimulationRequest):
             raw_start = dt.start_datetime or dt.start or dt.startTime
             if not raw_start: continue
 
-            # Convert start time safely (Handles both ISO strings and UI display strings)
+            # Convert start time safely — preserve local time by stripping TZ info
+            # instead of converting from UTC (frontend sends ISO with Z suffix = UTC,
+            # but the actual clock time the user typed IS the local time we want)
             try:
-                start_dt = datetime.fromisoformat(raw_start.replace('Z', '+00:00')).replace(tzinfo=None)
+                # Parse the ISO string, but treat it as local wall-clock time
+                # e.g. "2026-09-11T08:00:00.000Z" → we want 08:00, not 08:00 UTC → 13:30 IST
+                iso_clean = raw_start.replace('Z', '').replace('+00:00', '').replace('+05:30', '')
+                # Handle milliseconds if present
+                if '.' in iso_clean:
+                    iso_clean = iso_clean.split('.')[0]
+                start_dt = datetime.fromisoformat(iso_clean)
             except ValueError:
                 try:
                     start_dt = datetime.strptime(raw_start, "%d/%m/%Y, %I:%M %p")
@@ -177,7 +186,11 @@ def run_simulation_api(request: SimulationRequest):
             raw_end = dt.end_datetime or dt.end
             if raw_end:
                 try:
-                    end_dt = datetime.fromisoformat(raw_end.replace('Z', '+00:00')).replace(tzinfo=None)
+                    # Same treatment for end time — strip TZ, keep wall-clock time
+                    iso_end = raw_end.replace('Z', '').replace('+00:00', '').replace('+05:30', '')
+                    if '.' in iso_end:
+                        iso_end = iso_end.split('.')[0]
+                    end_dt = datetime.fromisoformat(iso_end)
                 except:
                     continue
             elif dt.duration:
@@ -186,8 +199,21 @@ def run_simulation_api(request: SimulationRequest):
             else:
                 continue  # Skip if we have no way to calculate when it ends
 
+            raw_sys = dt.line or dt.system or "ALL"
+            clean_sys = str(raw_sys).strip().upper()
+            if clean_sys in ["BOTH", "BOTH LINES", "ALL", "ALL_SYSTEMS"]:
+                target_sys = "ALL_SYSTEMS"
+            elif "12T" in clean_sys:
+                target_sys = "12T"
+            elif "6T" in clean_sys:
+                target_sys = "6T"
+            elif "1.25T" in clean_sys:
+                target_sys = "1.25T"
+            else:
+                target_sys = raw_sys
+
             parsed_downtimes.append({
-                "system": dt.system or "ALL",
+                "system": target_sys,
                 "start": start_dt,
                 "end": end_dt,
                 "reason": dt.reason or "Maintenance"

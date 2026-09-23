@@ -349,7 +349,7 @@ class Scheduler:
             while overlap:
                 overlap = False
                 for dt in downtimes:
-                    if dt['system'] == 'ALL' or dt['system'] in system:
+                    if dt['system'] in ['ALL', 'ALL_SYSTEMS', 'BOTH'] or dt['system'] in system:
                         if final_mkg_start < dt['end'] and final_mkg_end > dt['start']:
                             final_mkg_end = dt['start']
                             final_mkg_start = final_mkg_end - timedelta(minutes=int(bct))

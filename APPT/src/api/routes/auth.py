@@ -8,6 +8,7 @@ from src.auth import (
     create_access_token, 
     ACCESS_TOKEN_EXPIRE_MINUTES,
     get_current_user,
+    get_current_user_optional,
     admin_required,
     get_password_hash
 )
@@ -88,7 +89,7 @@ async def read_users_me(current_user: dict = Depends(get_current_user)):
     return current_user
 
 @router.post("/signup")
-async def signup(user_data: UserCreate, current_user: Optional[dict] = Depends(get_current_user)):
+async def signup(user_data: UserCreate, current_user: Optional[dict] = Depends(get_current_user_optional)):
     engine = get_engine()
     with engine.begin() as conn:
         existing = conn.execute(

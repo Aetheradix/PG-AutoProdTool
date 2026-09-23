@@ -66,6 +66,14 @@ async def get_gantt_chart_data():
                         system_dict[str(tank_config)] = config_group.to_dict(orient="records")
                 grouped_data[system] = system_dict
 
+            # Include ALL_SYSTEMS downtime rows as a flat list so frontend can inject them
+            all_systems_df = ps_df[
+                ps_df['description'].str.upper().str.startswith('DOWNTIME', na=False) &
+                ~ps_df['system'].isin(['6T', '12T'])
+            ]
+            if not all_systems_df.empty:
+                grouped_data['ALL_SYSTEMS'] = all_systems_df.to_dict(orient="records")
+
         # 2. Fetch data from timeline_events for Tanks (flat list)
         te_query = text("SELECT * FROM timeline_events ORDER BY start_time ASC")
         te_df = pd.read_sql(te_query, engine)
