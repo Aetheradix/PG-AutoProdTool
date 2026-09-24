@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+﻿from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -6,6 +6,7 @@ import os
 
 from src.db import get_engine
 from src.api.routes import (
+    equipments_master,
     status,
     recent_data,
     excel,
@@ -43,6 +44,10 @@ app.include_router(recent_data.router, prefix="/api/v1", tags=["Recent Data"])
 app.include_router(excel.router, prefix="/api/excel", tags=["Excel"])
 
 app.include_router(packing_plan.router, prefix="/api/v1", tags=["Packing Plan"] )
+
+app.include_router(
+    equipments_master.router, prefix="/api/v1/equipments-master", tags=["Equipment Master"]
+)
 
 app.include_router(sku_master.router, prefix="/api/v1/sku-master", tags=["SKU Master"])
 app.include_router(
